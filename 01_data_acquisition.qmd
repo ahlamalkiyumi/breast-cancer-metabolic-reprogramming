@@ -1,0 +1,124 @@
+---
+title: "01 - Data Acquisition"
+format: html
+engine: knitr
+---
+
+```{r}
+if (!require("BiocManager")) install.packages("BiocManager")
+BiocManager::install("recount3")
+```
+
+```{r}
+library(recount3)
+# Get list of available human projects
+human_projects <- available_projects()
+```
+
+```{r}
+# Filter for TCGA-BRCA
+proj_info <- subset(
+  human_projects,
+  project == "BRCA" & file_source == "tcga" & project_type =="data_sources"
+  )
+# Create RangedSummarizedExperiment with raw counts
+rse_brca <- create_rse(proj_info)
+```
+
+```{r}
+# IMPORTANT: recount3 stores "raw" counts as coverage-based; convert to
+# actual read counts using this transform function
+assay(rse_brca, "counts") <- transform_counts(rse_brca)
+```
+
+```{r}
+# Extract what you need
+counts_matrix <- assay(rse_brca, "counts") # genes x samples raw counts
+gene_metadata <- as.data.frame(rowData(rse_brca)) # gene IDs, names, lengths
+sample_metadata <- as.data.frame(colData(rse_brca))  # tumor/normal, subtype, clinical info
+
+```
+
+```{r}
+# Export to CSV for Python
+write.csv(counts_matrix, "tcga_brca_counts.csv")
+write.csv(gene_metadata, "tcga_brca_gene_metadata.csv")
+write.csv(sample_metadata, "tcga_brca_sample_metadata.csv")
+```
+
+```{r}
+#check the data
+data <- read.csv("tcga_brca_counts.csv")
+head(data)
+```
+
+```{r}
+# Check for duplicate/malformed column names
+#colnames(counts_matrix)[1:5]
+length(unique(colnames(counts_matrix))) == ncol(counts_matrix)  # should be TRUE
+
+```
+
+```{r}
+length(unique(rownames(counts_matrix))) == nrow(counts_matrix)  # TRUE = no duplicates
+```
+
+```{r}
+head(sample_metadata)
+```
+
+```{r}
+table(sample_metadata$tcga.cgc_sample_sample_type)
+```
+
+```{r}
+# Rename counts_matrix columns to use the barcode instead of UUID
+#faced some issues with ID, so decided to use barcode
+colnames(counts_matrix) <- sample_metadata$tcga.tcga_barcodehea
+```
+
+```{r}
+write.csv(counts_matrix, "tcga_brca_counts.csv")
+```
+
+```{r}
+data <- read.csv("tcga_brca_counts.csv")
+head(data)
+```
+
+```{r}
+head(gene_metadata)
+```
+
+```{r}
+sum(gene_metadata$gene_type == "protein_coding")
+```
+
+```{r}
+table(gene_metadata$gene_type)
+```
+
+```{r}
+#we will only focus on protein_coding genes
+protein_coding_ids <- rownames(rse_brca)[rowData(rse_brca)$gene_type == "protein_coding"]
+counts_matrix_pc <- counts_matrix[protein_coding_ids, ]
+gene_metadata_pc <- gene_metadata[protein_coding_ids, ]
+```
+
+```{r}
+head(gene_metadata_pc)
+```
+
+```{r}
+# Check if a sample is entirely zero (bad sample)
+colSums(counts_matrix_pc)[1:10]  # should NOT be 0 for any sample
+```
+
+```{r}
+mean(counts_matrix_pc == 0)
+```
+
+```{r}
+write.csv(counts_matrix_pc, "tcga_brca_counts.csv")
+write.csv(gene_metadata_pc, "tcga_brca_gene_metadata.csv")
+```
