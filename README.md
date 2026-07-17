@@ -61,13 +61,7 @@ trusting a single approach.
 
 ## What I found
 
-Both methods pointed the same direction:
-
-
-
-## What's next
-
-This is one part of a larger project. Still to come:
+The analysis revealed a profound metabolic and cellular state transition during tumorigenesis. Normal breast tissue-associated pathways involved in adipogenesis, PPAR signaling, lipid oxidation, and differentiated metabolic functions were markedly suppressed. In contrast, tumors showed activation of glycolysis, mTORC1 signaling, estrogen-responsive pathways, and strong E2F-driven cell-cycle programs. These changes indicate a shift from a differentiated lipid-metabolic phenotype toward a proliferative anabolic state supporting tumor growth. Additionally, increased extracellular matrix remodeling, interferon signaling, and DNA repair pathways suggest substantial tumor microenvironment remodeling, immune activation, and replication stress.
 
 
 
