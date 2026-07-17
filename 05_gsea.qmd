@@ -1,0 +1,111 @@
+---
+title: "GSEA"
+format: html
+editor: visual
+---
+
+## Tcga brca gsea hallmark
+
+`GSEA on TCGA-BRCA ranked gene list (cancer vs. normal)`
+
+`Focus: metabolic Hallmark gene sets`
+
+```{r}
+BiocManager::install("clusterProfiler")
+```
+
+```{r}
+install.packages("msigdbr")
+```
+
+```{r}
+library(clusterProfiler)
+library(msigdbr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+#load data from python
+ranked <- read.csv("ranked_gene_list_for_gsea.csv")
+```
+
+```{r}
+# clusterProfiler wants a NAMED, SORTED numeric vector: names = gene symbols,
+# values = your ranking statistic (DESeq2's Wald stat)
+gene_list <- ranked$stat
+names(gene_list) <- ranked$gene_symbol
+gene_list <- sort(gene_list, decreasing = TRUE) #must be sorted descending
+
+head(gene_list)
+tail(gene_list)
+```
+
+### Get Hallmark gene sets
+
+```{r}
+hallmark_sets <- msigdbr(species = "Homo sapiens",category = "H") %>% dplyr::select(gs_name, gene_symbol)
+
+# Quick look at which metabolic-relevant Hallmark sets exist
+unique(hallmark_sets$gs_name)[grepl("GLYCOL|OXIDATIVE|FATTY|METABOL", unique(hallmark_sets$gs_name))]
+```
+
+```{r}
+#run GSEA
+gsea_res <- GSEA(
+  geneList = gene_list,
+  TERM2GENE = hallmark_sets,
+  pvalueCutoff = 1,
+  minGSSize = 10,
+  maxGSSize = 500,
+  seed = TRUE
+)
+```
+
+Look at the full results table, sorted by significance
+
+```{r}
+gsea_df <- as.data.frame(gsea_res) %>% arrange(p.adjust)
+print(gsea_df[, c("ID", "NES", "pvalue", "p.adjust")])
+```
+
+`NES = Normalized Enrichment Score`
+
+`Positive NES  -> pathway genes skew toward the TOP of your ranked list (UP in cancer, since you ranked cancer-vs-normal with positive stat = higher in cancer)`
+
+`Negative NES  -> pathway genes skew toward the BOTTOM (DOWN in cancer)`
+
+`p.adjust  -> same idea as padj before`
+
+We can check specific pathways
+
+```{r}
+targets <- c("HALLMARK_GLYCOLYSIS",
+             "HALLMARK_OXIDATIVE_PHOSPHORYLATION",
+             "HALLMARK_FATTY_ACID_METABOLISM")
+
+gsea_df %>% filter(ID %in% targets) %>%
+  dplyr::select(ID, NES, pvalue, p.adjust)
+```
+
+Plot the classic GSEA enrichment curve for each
+
+```{r}
+library(enrichplot)
+for (term in targets) {
+  if (term %in% gsea_res@result$ID) {
+    p <- gseaplot2(gsea_res, geneSetID = term, title = term)
+    ggsave(paste0("gsea_plot_", term, ".png"), p, width = 8, height = 6, dpi = 150)
+  }
+}
+```
+
+```{r}
+p_dot <- dotplot(gsea_res, showCategory = 20, split = ".sign") + facet_grid(. ~ .sign)
+ggsave("gsea_dotplot_top20.png", p_dot, width = 10, height = 8, dpi = 150)
+
+cat("\nDone. Check for:\n")
+cat("  - gsea_results_hallmark.csv (full table)\n")
+cat("  - gsea_plot_HALLMARK_*.png (individual enrichment curves)\n")
+cat("  - gsea_dotplot_top20.png (summary figure)\n")
+```

@@ -1,0 +1,125 @@
+---
+title: "03_differential_expression"
+format: html
+---
+
+```{python}
+data_filtered = pd.read_csv("data_filtered.csv", index_col=0)
+sample = pd.read_csv("sample.csv", index_col=0)
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv")
+```
+
+```{python}
+sample.head()
+```
+
+## Applying DESeq2
+
+DESeq2 takes RNA-seq count data and identifies genes whose expression is significantly different between conditions.
+
+```{python}
+#change the column name to condition
+condition_data = sample[["tcga.cgc_sample_sample_type"]].copy()
+condition_data  = condition_data .rename(columns={"tcga.cgc_sample_sample_type": "condition"})
+
+# Map the long TCGA labels to short, consistent values
+condition_data ["condition"] = condition_data ["condition"].map({
+    "Primary Tumor": "cancer",
+    "Solid Tissue Normal": "normal"
+})
+
+# Confirm mapping worked and nothing became NaN
+print(condition_data ["condition"].value_counts(dropna=False))
+
+# Set "normal" as the reference level, so fold changes read as tumor-vs-normal
+condition_data ["condition"] = condition_data ["condition"].astype("category")
+condition_data ["condition"] = condition_data ["condition"].cat.reorder_categories(["normal", "cancer"])
+```
+
+```{python}
+condition_data.shape
+```
+
+```{python}
+data_filtered = data_filtered.apply(pd.to_numeric, errors="coerce")
+```
+
+```{python}
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+
+counts_for_dds = data_filtered.T
+dds = DeseqDataSet(
+    counts=counts_for_dds,
+    metadata=condition_data,
+    design_factors="condition",
+    refit_cooks=True,
+)
+
+dds.deseq2()
+```
+
+```{python}
+stat_res = DeseqStats(
+    dds,
+    contrast=["condition", "cancer", "normal"],  # explicit: cancer vs. normal
+)
+stat_res.summary()
+ 
+results_df = stat_res.results_df.sort_values("padj")
+ 
+print(results_df.head(10))
+```
+
+**Standard filtering for "significant" genes**, typically: `padj < 0.05` and `|log2FoldChange| > 1`. This combination is what most published cancer RNA-seq papers use as their significance bar,
+
+```{python}
+results_df.to_csv("deseq2_results_tcga_brca.csv")
+sig_genes = results_df[
+(results_df["padj"]< 0.05) &
+(results_df["log2FoldChange"].abs() > 1)]
+
+print(f"Total genes tested: {len(results_df)}")
+print(f"Significant genes (padj<0.05, |log2FC|>1): {len(sig_genes)}")
+```
+
+Mapping genes
+
+```{python}
+genes_metadata = genes_metadata.set_index("gene_id")
+```
+
+```{python}
+print(sig_genes.index[:3])
+print(genes_metadata.index[:3])
+```
+
+```{python}
+#add new column for gene symol and map it with genes metadata
+sig_genes["gene_symbol"] = sig_genes.index.map(genes_metadata["gene_name"])
+sig_genes.head()
+```
+
+```{python}
+# Split into up- and down-regulated 
+up_in_cancer = sig_genes[sig_genes["log2FoldChange"] > 1]
+down_in_cancer = sig_genes[sig_genes["log2FoldChange"] < -1]
+
+print(f" Up in Cancer: {len(up_in_cancer)}")
+print(f" Down in Cancer: {len(down_in_cancer)}")
+```
+
+```{python}
+# Look at them, sorted by strength of change not just significance
+print("Top 10 upregulated in cancer (by fold change):")
+print(up_in_cancer.sort_values("log2FoldChange", ascending=False).head(10))
+ 
+print("\nTop 10 downregulated in cancer (by fold change):")
+print(down_in_cancer.sort_values("log2FoldChange").head(10))
+```
+
+```{python}
+sig_genes.to_csv("significant_genes.csv")
+up_in_cancer.to_csv("upregulated_genes.csv")
+down_in_cancer.to_csv("downregulated_genes.csv")
+```

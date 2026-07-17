@@ -1,0 +1,153 @@
+---
+title: "Untitled"
+format: html
+execute:
+  python: /Users/air/bioenv311/bin/python
+---
+
+## Pathway enrichment
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/Users/air/bioenv311/bin/python")
+
+library(reticulate)
+
+py_config()
+```
+
+```{python}
+import pandas as pd
+import gseapy as gp
+```
+
+You can add options to executable code like this
+
+```{python}
+up_genes = pd.read_csv("upregulated_genes.csv", index_col=0)
+down_genes = pd.read_csv("downregulated_genes.csv", index_col=0)
+up_gene_list = up_genes["gene_symbol"].tolist()
+down_gene_list = down_genes["gene_symbol"].tolist()
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv")
+```
+
+```{python}
+gene_sets = ["MSigDB_Hallmark_2020", "KEGG_2021_Human"]
+
+enr_up = gp.enrichr(
+    gene_list=up_gene_list,
+    gene_sets=gene_sets,
+    organism="human",
+    outdir=None,   # don't write files, just return the dataframe
+)
+ 
+enr_down = gp.enrichr(
+    gene_list=down_gene_list,
+    gene_sets=gene_sets,
+    organism="human",
+    outdir=None,
+)
+
+# Filter to significant pathway hits and look specifically for
+# metabolic/mitochondrial terms
+up_results = enr_up.results.sort_values("Adjusted P-value")
+down_results = enr_down.results.sort_values("Adjusted P-value")
+```
+
+```{python}
+up_results.head()
+```
+
+```{python}
+print(f"Top 15 pathways UP in cancer")
+print(up_results[["Term","Overlap","Adjusted P-value", "Genes"]].head(15).to_string())
+```
+
+Breast cancer samples demonstrate strong activation of **proliferative, anabolic, and tumor-associated signaling programs**. The most significantly enriched pathways include **E2F targets, G2/M checkpoint, cell cycle, and mitotic spindle pathways**, reflecting increased DNA replication, cell division, and genomic stress. Metabolically, tumors show activation of **glycolysis and mTORC1 signaling**, indicating increased glucose utilization and anabolic activity to support rapid growth. Estrogen-responsive pathways are also elevated, suggesting hormone-associated transcriptional regulation in the tumor cohort. Furthermore, increased **extracellular matrix remodeling, EMT-related programs, interferon responses, and DNA repair pathways** indicate activation of the tumor microenvironment, immune signaling, and mechanisms supporting tumor survival and adaptation.
+
+```{python}
+print(f"Top 15 pathways DOWN in cancer")
+print(down_results[["Term", "Overlap", "Adjusted P-value", "Genes"]].head(15).to_string())
+```
+
+Breast cancer samples show a significant reduction in pathways associated with **normal breast tissue differentiation, lipid metabolism, and oxidative energy utilization**. The strongest suppressed pathways include **adipogenesis, PPAR signaling, regulation of lipolysis, and myogenesis-related programs**, with decreased expression of genes involved in fatty acid uptake, storage, and oxidation (e.g., **PPARG, PPARA, ADIPOQ, FABP4, LPL, ACSL1, ACADL, SCD**). This suggests a loss of the normal lipid-handling and metabolically differentiated phenotype of breast tissue. Additionally, reduced expression of extracellular matrix, focal adhesion, and epithelial junction pathways indicates disruption of normal tissue architecture and cellular organization. Overall, these findings suggest a transition away from a differentiated, lipid-oxidative metabolic state toward a cancer-associated metabolic phenotype.
+
+Specifically search for metabolic/mitochondrial keyword matches
+
+```{python}
+keywords ="oxidative|OXPHOS|glycol|mitochond|TCA|fatty acid|metabol|respirat"
+
+up_metabolic = up_results[up_results["Term"].str.contains(keywords,case=False,regex=True )]
+down_metabolic = down_results[up_results["Term"].str.contains(keywords,case=False,regex=True )]
+
+print(f"\nMetabolic/mitochondrial terms found UP in cancer: {len(up_metabolic)}")
+print(up_metabolic[["Term", "Adjusted P-value"]].to_string())
+ 
+print(f"\nMetabolic/mitochondrial terms found DOWN in cancer: {len(down_metabolic)}")
+print(down_metabolic[["Term", "Adjusted P-value"]].to_string())
+```
+
+```{python}
+up_results.to_csv("enrichment_up_in_cancer.csv")
+down_results.to_csv("enrichment_down_in_cancer.csv")
+```
+
+```{python}
+down_results[down_results["Term"].str.contains("Fatty Acid Metabolism", case=False)]
+```
+
+## Export a full ranked gene list for GSEA
+
+for gsea, we will use all DESeq2 results.
+
+```{python}
+results_df = pd.read_csv("deseq2_results_tcga_brca.csv")
+```
+
+```{python}
+results_df.head()
+```
+
+```{python}
+genes_metadata.head()
+```
+
+```{python}
+results_df = results_df.set_index("gene_id")
+genes_metadata = genes_metadata.set_index("Unnamed: 0")
+```
+
+```{python}
+print("results_df index sample:", results_df.index[:3].tolist())
+print("gene_metadata index sample:", genes_metadata.index[:3].tolist())
+```
+
+```{python}
+results_df["gene_symbol"] = results_df.index.map(genes_metadata["gene_name"])
+```
+
+```{python}
+# Drop genes with no symbol, no stat, or duplicate symbols
+ranked = results_df.dropna(subset=["gene_symbol", "stat"]).copy()
+```
+
+```{python}
+# If multiple Ensembl IDs map to the same symbol, keep the one with the
+# most extreme stat (GSEA needs one value per gene symbol, not duplicates)
+ranked["abs_stat"] = ranked["stat"].abs()
+ranked = ranked.sort_values("abs_stat", ascending=False)
+ranked = ranked.drop_duplicates(subset="gene_symbol", keep="first")
+ 
+print(f"\nGenes going into ranked list: {len(ranked)}")
+```
+
+```{python}
+# Export just gene_symbol + stat, sorted by stat descending
+# (R's clusterProfiler expects this order: most positive to most negative)
+ranked_export = ranked[["gene_symbol", "stat"]].sort_values("stat", ascending=False)
+ranked_export.to_csv("ranked_gene_list_for_gsea.csv", index=False)
+ 
+print("\nSaved: ranked_gene_list_for_gsea.csv")
+print(ranked_export.head())
+print("...")
+print(ranked_export.tail())
+```
