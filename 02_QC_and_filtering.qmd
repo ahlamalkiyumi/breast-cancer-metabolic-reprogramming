@@ -1,0 +1,32 @@
+---
+title: "02_QC_and_filtering,"
+format: html
+editor: visual
+jupyter: python3
+execute:
+  python: /Users/air/bioenv/bin/python
+---
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/Users/air/bioenv/bin/python")
+
+library(reticulate)
+
+py_config()
+```
+
+```{python}
+import sys
+print(sys.executable)
+```
+
+```{python}
+import pandas as pd
+
+data = pd.read_csv("cga_brca_counts.csv")
+sample = pd.read_csv("tcga_brca_sample_metadata.csv")
+```
+
+```{python}
+
+```
