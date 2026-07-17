@@ -18,11 +18,7 @@ felt like a natural place to start applying that interest.
 
 ## The question
 
-Do breast tumors show a measurable shift away from mitochondrial
-energy production (oxidative phosphorylation, fatty acid metabolism)
-and toward glycolysis, compared to normal breast tissue and can I
-recover this signature independently, using two different statistical
-methods, from real patient data?
+What metabolic changes occur in breast tumors compared to normal tissue, and which specific pathways are most strongly affected, including whether a shift toward glycolysis and away from mitochondrial energy production (the Warburg effect) is part of that picture?
 
 ## Data
 
