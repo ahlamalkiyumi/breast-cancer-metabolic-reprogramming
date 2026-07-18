@@ -18,7 +18,7 @@ felt like a natural place to start applying that interest.
 
 ## The question
 
-What metabolic changes occur in breast tumors compared to normal tissue, and which specific pathways are most strongly affected, including whether a shift toward glycolysis and away from mitochondrial energy production (the Warburg effect) is part of that picture?
+What metabolic changes occur in breast tumors compared to normal tissue, and which specific pathways are most strongly affected?
 
 ## Data
 
@@ -34,7 +34,7 @@ matched normal tissue comparison only
 ## Method, in plain terms
 
 
-QC and filtering — checked for zero-expression genes, filtered
+QC and filtering checked for zero-expression genes, filtered
 low-expression genes using a CPM-based threshold (rather than a raw
 count cutoff, since library sizes vary a lot across this many
 samples), confirmed sample IDs matched correctly between the
@@ -53,17 +53,15 @@ the entire tested gene list, ranked by DESeq2's test statistic,
 this doesn't depend on picking an arbitrary significance cutoff,
 so it's the more rigorous of the two
 
+MitoCarta3.0 excel file was used in python to investigate how many genes related to mitochondria and their pathways. 
 
-I used both deliberately, so I could check whether a simpler method
-and a more careful one actually agreed with each other, rather than
-trusting a single approach.
 
 
 ## What I found
 
 The analysis revealed a profound metabolic and cellular state transition during tumorigenesis. Normal breast tissue-associated pathways involved in adipogenesis, PPAR signaling, lipid oxidation, and differentiated metabolic functions were markedly suppressed. In contrast, tumors showed activation of glycolysis, mTORC1 signaling, estrogen-responsive pathways, and strong E2F-driven cell-cycle programs. These changes indicate a shift from a differentiated lipid-metabolic phenotype toward a proliferative anabolic state supporting tumor growth. Additionally, increased extracellular matrix remodeling, interferon signaling, and DNA repair pathways suggest substantial tumor microenvironment remodeling, immune activation, and replication stress.
 
-
+Using MitoCarta3.0, Breast cancer mitochondria display a shift from metabolically versatile organelles toward a remodeled, stress-adapted state, characterized by reduced catabolic metabolism and enhanced protein import, translation, and maintenance machinery.
 
 
 ## Tools used
@@ -71,5 +69,6 @@ The analysis revealed a profound metabolic and cellular state transition during 
 
 Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn
 R: clusterProfiler, msigdbr, ggplot2
+other: MitoCarta3.0
 Notebooks written in Quarto (.qmd), mixing both languages in a
 single reproducible workflow
