@@ -63,11 +63,14 @@ The analysis revealed a profound metabolic and cellular state transition during 
 
 Using MitoCarta3.0, Breast cancer mitochondria display a shift from metabolically versatile organelles toward a remodeled, stress-adapted state, characterized by reduced catabolic metabolism and enhanced protein import, translation, and maintenance machinery.
 
+By doing subtype stratification of mitochondrial pathways scores, Luminal B breast tumors exhibit coordinated upregulation of mitochondrial protein import, translation, and cristae organization, supporting enhanced oxidative phosphorylation and fatty acid oxidation, while simultaneously downregulating antioxidant and iron homeostasis pathways, suggesting a high-energy but potentially redox-vulnerable mitochondrial state.
+
+
 
 ## Tools used
 
 
-Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn
+Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn, kruskal-wallis, dunn's test
 R: clusterProfiler, msigdbr, ggplot2
 other: MitoCarta3.0
 Notebooks written in Quarto (.qmd), mixing both languages in a
