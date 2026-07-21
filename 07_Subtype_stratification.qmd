@@ -1,0 +1,326 @@
+---
+title: "Subtype stratification"
+format: html
+---
+
+## Subtype Stratification of Mitochondrial Pathway Scores
+
+Tests whether the mitochondrial/metabolic shifts found in the whole-cohort comparison (Fatty Acid Oxidation down, biogenesis/import up) differ by molecular subtype (Luminal A, Luminal B, HER2-enriched, Basal-like).
+
+Expectation from the literature: Basal-like/TNBC tumors typically show the strongest glycolytic shift and metabolic rewiring; Luminal tumors tend to show milder changes.
+
+## Prepare the data with subtypes
+
+```{r}
+library(TCGAbiolinks)
+library(dplyr)
+```
+
+```{r}
+subtype_info <- TCGAquery_subtype(tumor = "BRCA")
+
+# Look at what's actually in it
+colnames(subtype_info)
+head(subtype_info)
+```
+
+```{r}
+table(subtype_info$BRCA_Subtype_PAM50, useNA = "always")
+```
+
+```{r}
+sample_metadata <- read.csv("sample.csv")
+```
+
+```{r}
+# Check actual structure
+str(subtype_info)
+colnames(subtype_info)
+head(subtype_info$patient, 10)  # or whatever the actual barcode column is called
+```
+
+```{r}
+head(subtype_info$patient, 10)
+```
+
+```{r}
+# patient matches with tcga.gdc_cases.submitter_id in sample_metadata
+head(sample_metadata$tcga.gdc_cases.submitter_id, 10)
+```
+
+```{r}
+merged_test <- sample_metadata %>%
+  left_join(
+    subtype_info %>% dplyr::select(patient, BRCA_Subtype_PAM50),
+    by = c("tcga.gdc_cases.submitter_id" = "patient")
+  )
+
+#Check 
+"BRCA_Subtype_PAM50" %in% colnames(merged_test)
+dim(merged_test)   # should have same row count as sample_metadata, one extra column
+table(merged_test$BRCA_Subtype_PAM50, useNA = "always")
+```
+
+```{r}
+sample_metadata <- merged_test
+```
+
+```{r}
+#some normal tissus were labled because were obtained from same cancer patient. here we will label normall tissues with NA
+sample_metadata <- sample_metadata %>%
+  mutate(BRCA_Subtype_PAM50 = ifelse(
+    tcga.cgc_sample_sample_type == "Solid Tissue Normal",
+    NA,
+    BRCA_Subtype_PAM50
+  ))
+
+# Recheck
+table(sample_metadata$BRCA_Subtype_PAM50, useNA = "always")
+```
+
+```{r}
+#we will remove tumor sample with na subtype for analysis 
+subtype_analysis_data <- sample_metadata %>%
+  filter(tcga.cgc_sample_sample_type == "Primary Tunor",
+         !is.na(BRCA_Subtype_PAM50))
+```
+
+```{r}
+cat("Tumor samples with valid subtype:", nrow(subtype_analysis_data), "\n")
+cat("Tumor samples excluded (missing subtype):",
+    sum(sample_metadata$tcga.cgc_sample_sample_type == "Primary Tumor" &
+          is.na(sample_metadata$BRCA_Subtype_PAM50)), "\n")
+```
+
+```{r}
+library(dplyr)
+
+# Check how many rows match the condition you want to remove, before removing
+sample_metadata %>%
+  filter(tcga.cgc_sample_sample_type == "Primary Tumor", is.na(BRCA_Subtype_PAM50)) %>%
+  nrow()
+
+# Remove those specific rows: keep everything EXCEPT
+# (Primary Tumor AND missing subtype)
+sample_metadata <- sample_metadata %>%
+  filter(!(tcga.cgc_sample_sample_type == "Primary Tumor" & is.na(BRCA_Subtype_PAM50)))
+
+# Confirm the result
+nrow(sample_metadata)
+table(sample_metadata$tcga.cgc_sample_sample_type, useNA = "always")
+table(sample_metadata$BRCA_Subtype_PAM50, useNA = "always")
+```
+
+```{r}
+ncol(sample_metadata)
+nrow(sample_metadata)
+```
+
+```{r}
+write.csv(sample_metadata,"sample_metadata_with_subtype.csv", row.names=TRUE)
+```
+
+```{r}
+data <- read.csv("sample_metadata_with_subtype.csv")
+ncol(data)
+nrow(data)
+```
+
+## Subtype Stratification 
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import kruskal
+import scikit_posthocs as sp
+import seaborn as sns
+```
+
+```{python}
+sample_meta= pd.read_csv("sample_metadata_with_subtype.csv")
+pathway_scores = pd.read_csv("mitocarta_pathway_subscores.csv", index_col=0)
+mito_score = pd.read_csv("mitochondrial_score_per_sample.csv", index_col=0).squeeze()
+```
+
+```{python}
+subtype_col = "BRCA_Subtype_PAM50"
+ 
+print("Subtype counts (all samples, including NA normals):")
+print(sample_meta[subtype_col].value_counts(dropna=False))
+```
+
+```{python}
+tumor_with_subtype = sample_meta[sample_meta[subtype_col].notna()].copy()
+print(f"\nTumor samples with a valid PAM50 subtype: {len(tumor_with_subtype)}")
+print(tumor_with_subtype[subtype_col].value_counts())
+```
+
+```{python}
+tumor_with_subtype = tumor_with_subtype.set_index("tcga.tcga_barcode")
+```
+
+```{python}
+print(tumor_with_subtype.index[:5])
+print(mito_score.index[:5])
+print(pathway_scores.index[:5])
+```
+
+```{python}
+#Attach scores
+tumor_with_subtype["mito_score"] = mito_score.reindex(tumor_with_subtype.index)
+tumor_with_subtype = tumor_with_subtype.join(
+    pathway_scores.reindex(tumor_with_subtype.index)
+)
+```
+
+```{python}
+n_matched = tumor_with_subtype["mito_score"].notna().sum()
+print(f"Samples with a matched mito_score after join: {n_matched} out of {len(tumor_with_subtype)}")
+assert n_matched > len(tumor_with_subtype) * 0.9, (
+    "Fewer than 90% of samples matched -- check index formats between "
+    "tumor_with_subtype, mito_score, and pathway_scores before proceeding."
+)
+ 
+print("\nPer-subtype sample count after join (should match the raw value_counts):")
+print(tumor_with_subtype.groupby(subtype_col)["mito_score"].apply(lambda x: x.notna().sum()))
+```
+
+## Kruskal-Wallis
+
+Kruskal-Wallis = non-parametric equivalent of one-way ANOVA, appropriate here since we shouldn't assume the scores are normally distributed within each subtype group, and group sizes are unequal.
+
+```{python}
+subtype_groups = [
+    tumor_with_subtype.loc[tumor_with_subtype[subtype_col] == s, "mito_score"].dropna()
+    for s in tumor_with_subtype[subtype_col].unique()
+]
+stat, pval = kruskal(*subtype_groups)
+print(f"\nKruskal-Wallis test, overall mitochondrial score across subtypes: "
+      f"H={stat:.2f}, p={pval:.2e}")
+```
+
+means:
+
+- **Null hypothesis (H₀):** mitochondrial scores are the same across all breast cancer subtypes
+
+- **Alternative hypothesis (H₁):** at least one subtype has a different mitochondrial score distribution
+
+  There is a statistically significant difference in overall MitoCarta mitochondrial pathway scores among breast cancer subtypes.
+
+## Dunn's test
+
+```{python}
+# since Kruskal-Wallis only tells you "groups differ somewhere", not which
+dunn_result = sp.posthoc_dunn(
+  tumor_with_subtype, val_col="mito_score", group_col=subtype_col, p_adjust="fdr_bh"
+)
+print("\nPairwise subtype comparisons (Dunn's test, FDR-adjusted p-values):")
+print(dunn_result)
+```
+
+- **LumB is different from every other group** (all FDR \< 0.001)
+
+- **Normal-like is different from every subtype** (all FDR \< 0.05)
+
+- **Basal and HER2 are not distinguishable from each other**
+
+- **Basal and HER2 are not significantly different from LumA** (although LumA vs Basal is trending)
+
+  LumB tumors show a distinct mitochondrial transcriptional program compared with other breast cancer subtypes.
+
+```{python}
+print(tumor_with_subtype.groupby(subtype_col)["mito_score"].agg(["mean", "median", "count"]).sort_values("mean"))
+```
+
+```{python}
+#Visualize overall score by subtype
+plt.figure(figsize=(9, 6))
+order = tumor_with_subtype.groupby(subtype_col)["mito_score"].median().sort_values().index
+sns.boxplot(data=tumor_with_subtype, x=subtype_col, y="mito_score", order=order)
+sns.stripplot(data=tumor_with_subtype, x=subtype_col, y="mito_score", order=order,
+              color="black", alpha=0.3, size=2)
+plt.title("Overall mitochondrial score by PAM50 subtype")
+plt.tight_layout()
+#plt.savefig("mito_score_by_subtype.png", dpi=150)
+plt.show()
+```
+
+```{python}
+#test specific pathway
+target_pathway = "Fatty acid oxidation"
+ 
+if target_pathway in tumor_with_subtype.columns:
+    fao_groups = [
+        tumor_with_subtype.loc[tumor_with_subtype[subtype_col] == s, target_pathway].dropna()
+        for s in tumor_with_subtype[subtype_col].unique()
+    ]
+    stat_fao, pval_fao = kruskal(*fao_groups)
+    print(f"\nKruskal-Wallis, {target_pathway} across subtypes: "
+          f"H={stat_fao:.2f}, p={pval_fao:.2e}")
+ 
+    print(f"\nMean {target_pathway} score by subtype:")
+    print(tumor_with_subtype.groupby(subtype_col)[target_pathway].mean().sort_values())
+```
+
+- **Overall mitochondrial gene expression** (biogenesis-heavy, all \~1,058 genes combined) does not cleanly separate Basal from other subtypes. LumB stands out instead, likely tracking proliferation rate rather than oxidative capacity specifically.
+
+- **Fatty acid oxidation specifically** a narrower, functionally coherent pathway does show the clean, strong, subtype-specific pattern predicted by the literature, with Basal-like tumors showing the sharpest suppression.
+
+mitochondrial dysfunction in cancer story isn't one uniform phenomenon, it depends heavily on which mitochondrial function you're measuring. Broad biogenesis measures reflect proliferation differences across subtypes; specific oxidative fuel-use pathways like fatty acid oxidation reflect the actual metabolic rewiring pattern tied to subtype biology (Basal/TNBC tumors are well known in the literature for relying more heavily on glycolysis and having reduced fatty acid oxidative capacity)
+
+## Lumb Pathway drivers
+
+```{python}
+from scipy.stats import mannwhitneyu
+from statsmodels.stats.multitest import multipletests
+
+subtype_col = "BRCA_Subtype_PAM50"
+pathway_cols = [c for c in pathway_scores.columns]   # from your existing script
+```
+
+```{python}
+#For each pathway, compare LumB vs. all other subtypes combined
+is_lumb = tumor_with_subtype[subtype_col] == "LumB"
+ 
+results = []
+for pathway in pathway_cols:
+    lumb_vals = tumor_with_subtype.loc[is_lumb, pathway].dropna()
+    other_vals = tumor_with_subtype.loc[~is_lumb, pathway].dropna()
+ 
+    if len(lumb_vals) < 5 or len(other_vals) < 5:
+        continue
+ 
+    stat, pval = mannwhitneyu(lumb_vals, other_vals)
+    effect_size = lumb_vals.mean() - other_vals.mean()   # positive = higher in LumB
+ 
+    results.append({
+        "pathway": pathway,
+        "lumb_mean": lumb_vals.mean(),
+        "other_mean": other_vals.mean(),
+        "difference": effect_size,
+        "pvalue": pval,
+    })
+ 
+results_df = pd.DataFrame(results)
+results_df["padj"] = multipletests(results_df["pvalue"], method="fdr_bh")[1]
+results_df = results_df.sort_values("difference", ascending=False)
+ 
+results_df.to_csv("lumb_vs_other_pathway_drivers.csv", index=False)
+```
+
+```{python}
+#Show the pathways most ELEVATED in LumB (driving it UP)
+print("=== Top 15 pathways MOST ELEVATED in LumB (driving the high score) ===")
+top_up = results_df[results_df["padj"] < 0.05].head(15)
+print(top_up[["pathway", "lumb_mean", "other_mean", "difference", "padj"]].to_string())
+```
+
+```{python}
+#Also show the pathways most SUPPRESSED in LumB
+print("\n=== Top 15 pathways MOST SUPPRESSED in LumB ===")
+bottom = results_df[results_df["padj"] < 0.05].tail(15).sort_values("difference")
+print(bottom[["pathway", "lumb_mean", "other_mean", "difference", "padj"]].to_string())
+```
+
+Luminal B breast tumors exhibit coordinated upregulation of mitochondrial protein import, translation, and cristae organization, supporting enhanced oxidative phosphorylation and fatty acid oxidation, while simultaneously downregulating antioxidant and iron homeostasis pathways, suggesting a high-energy but potentially redox-vulnerable mitochondrial state.
