@@ -1,0 +1,133 @@
+---
+title: "08_wgcna"
+format: html
+---
+
+## WGCNA: Weighted Gene Co-expression Network Analysis
+
+Instead of testing each gene individually against a trait (like DESeq2 step), WGCNA finds groups of genes ("modules") whose expression rises and falls TOGETHER across samples, genes acting as a coordinated unit, which often reflects shared regulation or shared biological function. Each module then gets correlated with traits of interest (subtype, mitochondrial score, etc.) as a WHOLE, rather than gene-by-gene.
+
+This is a genuinely different question than DESeq2/GSEA answered: not "which genes changed," but "which genes move together, and does that coordinated group relate to subtype or mitochondrial function.
+
+```{r}
+install.packages("WGCNA")
+```
+
+```{r}
+library(WGCNA)
+library(dplyr)
+
+options(stringsAsFactors = FALSE)
+allowWGCNAThreads()
+```
+
+load the expression data
+
+WGCNA wants samples as rows, genes as columns, the opposite orientation from DESeq2. Also we will use variance-stabilized or log-normalized expression, NOT raw counts.
+
+```{r}
+counts_filtered <- read.csv("data_filtered.csv", row.names = 1)
+gene_metadata <- read.csv("tcga_brca_gene_metadata.csv", row.names =1)
+```
+
+```{r}
+log_expr <- log2(counts_filtered + 1)
+expr_for_wgcna <- as.data.frame(t(log_expr))
+```
+
+Filter to the most informative genes before running wgcna
+
+WGCNA on \~15,000+ genes is computationally heavy and mostly adds noise, standard practice is to restrict to the most variable genes (the ones actually carrying information about differences between samples). Common choice: top 5,000-ish most variable genes.
+
+```{r}
+gene_var <- apply(expr_for_wgcna, 2, var)
+top_genes <- names(sort(gene_var, decreasing = TRUE))[1:5000]
+expr_for_wgcna <- expr_for_wgcna[, top_genes]
+```
+
+Check for outlier samples BEFORE building the network
+
+```{r}
+pca <- prcomp(expr_for_wgcna, scale. = TRUE)
+pca_df <- as.data.frame(pca$x[, 1:2])
+
+# Flag samples more than ~3-4 standard deviations from the mean on PC1 or PC2
+pc1_outliers <- rownames(pca_df)[abs(scale(pca_df$PC1)) > 4]
+pc2_outliers <- rownames(pca_df)[abs(scale(pca_df$PC2)) > 4]
+print(c(pc1_outliers, pc2_outliers))
+```
+
+no samples crossed that extreme outlier threshold.
+
+Choose a "soft threshold" power
+
+WGCNA needs one tuning parameter (power) that determines how strongly to emphasize strong correlations over weak ones when building the network. This step tests a range of values and picks the smallest one that achieves approximate "scale-free" network structure a property real biological networks tend to have.
+
+```{r}
+powers <- c(1:20)
+sft <- pickSoftThreshold(expr_for_wgcna, powerVector = powers,
+                         verbose = 5, networkType = "signed")
+
+pdf("wgcna_soft_threshold.pdf", width = 10, height = 5)
+par(mfrow = c(1, 2))
+plot(sft$fitIndices[, 1], -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)", ylab = "Scale Free Topology R^2",
+     main = "Scale independence")
+abline(h = 0.85, col = "red")
+plot(sft$fitIndices[, 1], sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)", ylab = "Mean Connectivity",
+     main = "Mean connectivity")
+dev.off()
+```
+
+```{r}
+print(sft$fitIndices[, c(1,2,5)])
+```
+
+R² crosses above 0.85 at **power = 13** (R²=0.90), power 12 is still just under (0.838). Standard WGCNA practice is to pick the smallest power that clears the threshold, so **13**
+
+Build the network and detect modules
+
+```{r}
+chosen_power <- 13
+
+net <- blockwiseModules(
+  expr_for_wgcna,
+  power = chosen_power,
+  networkType = "signed",
+  TOMType = "signed",
+  minModuleSize = 30,
+  reassignThreshold = 0,
+  mergeCutHeight = 0.25,
+  numericLabels = TRUE,
+  saveTOMs = FALSE,
+  verbose = 3
+)
+
+module_colors <- labels2colors(net$colors)
+table(module_colors)
+```
+
+we have 9 modules total, grey isn't a real module, it's genes that didn't cluster into any coherent group.
+
+\
+Visualize the module dendrogram
+
+```{r}
+plotDendroAndColors(net$dendrograms[[1]], module_colors[net$blockGenes[[1]]],
+                    "Module colors", dendroLabels = FALSE, hang = 0.03,
+                    addGuide = TRUE, guideHang = 0.05)
+```
+
+do these genes overlap with known pathways more than chance?
+
+To answer "which genes, and do they share function". We will extract each module's gene list, then run pathway enrichment **per module**
+
+```{r}
+module_assignments <-data.frame(
+  gene = colnames(expr_for_wgcna),
+  module = module_colors
+)
+
+write.csv(module_assignments, "wgcna_module_assignments.csv", row.names = FALSE)
+```
