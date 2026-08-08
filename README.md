@@ -11,7 +11,7 @@ Metabolic health and mitochondrial function are areas I'm especially interested 
 
 ## The question
 
-What metabolic changes occur in breast tumors compared to normal tissue, and which specific pathways are most strongly affected?
+How is metabolism rewired in breast cancer, and which metabolic pathways are most strongly altered compared with normal breast tissue?
 
 ## Data
 
