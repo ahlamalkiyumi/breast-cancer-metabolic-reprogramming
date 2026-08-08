@@ -31,31 +31,15 @@ No metastatic samples were included, this is a primary tumor vs.
 matched normal tissue comparison only
 
 
-## Method, in plain terms
+## Method
 
+1. QC included zero-expression gene removal, CPM-based low-expression filtering (chosen over a raw count cutoff due to variable library sizes), sample ID verification against clinical metadata, and PCA to confirm tumor/normal separation before statistical testing. Differential expression was run with PyDESeq2 (tumor vs. normal, normal as reference). Pathway enrichment was done two ways: over-representation analysis (gseapy/Enrichr) on significant genes, and rank-based GSEA (R, clusterProfiler + msigdbr) on the full ranked gene list by DESeq2 test statistic, avoiding an arbitrary significance cutoff. Mitochondrial pathway involvement was assessed using the MitoCarta3.0 gene inventory.
 
-QC and filtering checked for zero-expression genes, filtered
-low-expression genes using a CPM-based threshold (rather than a raw
-count cutoff, since library sizes vary a lot across this many
-samples), confirmed sample IDs matched correctly between the
-expression matrix and clinical metadata, and ran PCA as a sanity
-check that tumor and normal samples actually separate from each
-other before doing any statistical testing.
-Differential expression used PyDESeq2 to compare tumor vs.
-normal, with normal tissue set as the reference group so fold
-changes read as "tumor relative to normal."
-Pathway enrichment, done two ways:
+2. WGCNA (Weighted Gene Co-expression Network Analysis)
+The top 5,000 most variable protein-coding genes were used to construct a signed co-expression network (soft-thresholding power selected via scale-free topology fit), followed by hierarchical clustering to detect gene modules. Each module was functionally annotated using hypergeometric over-representation analysis against Hallmark and KEGG gene sets, and module eigengenes were correlated against tumor status and MitoCarta3.0-derived mitochondrial pathway scores to examine how co-expression structure relates to metabolic signal in the data.
 
-A quick over-representation check (Python, gseapy/Enrichr) on
-the significantly changed genes
-A full rank-based GSEA (R, clusterProfiler + msigdbr) using
-the entire tested gene list, ranked by DESeq2's test statistic, 
-this doesn't depend on picking an arbitrary significance cutoff,
-so it's the more rigorous of the two
-
-MitoCarta3.0 excel file was used in python to investigate how many genes related to mitochondria and their pathways. 
-
-
+4. Immune Signature Scoring (ICR)
+Samples were scored on the 20-gene Immunologic Constant of Rejection (ICR) signature and correlated against MitoCarta-derived mitochondrial fatty acid oxidation (FAO) scores within Basal-like tumors. To identify independent pathway associations, ICR and FAO genes were excluded from a separate ranked differential expression list (FAO-high vs. FAO-low, Wilcoxon rank-sum) before running preranked GSEA (Hallmark gene sets), avoiding circular enrichment from the scoring genes themselves. ESTIMATE-derived immune/stromal scores were used to confirm the ICR-FAO correlation was not driven by immune cell infiltration alone.
 
 ## What I found
 
