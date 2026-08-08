@@ -1,0 +1,125 @@
+---
+title: "09_Wgcna_module_enrichment"
+format: html
+---
+
+## What does each module actually DO biologically?
+
+We have gene groupings (modules) based on co-expression patterns,but WGCNA itself doesn't tell you what those genes. To find out, run the same kind of pathway enrichment we already did on DESeq2 up/down gene lists, just once per module now, instead of once for "up" and once for "down".
+
+```{r}
+library(clusterProfiler)
+library(msigdbr)
+library(dplyr)
+```
+
+load the data
+
+```{r}
+module_assignments <- read.csv("wgcna_module_assignments.csv")
+print(table(module_assignments$module))
+```
+
+```{r}
+head(module_assignments)
+```
+
+Exclude grey, thses are genes that didn't fit any coherent module, not a real biological group
+
+```{r}
+module_assignments <- module_assignments %>% filter(module !="grey")
+```
+
+Get Hallmark + KEGG gene sets (same as your earlier GSEA)
+
+```{r}
+hallmark_sets <- msigdbr(species = "Homo sapiens", category = "H") %>%
+  dplyr::select(gs_name, gene_symbol)
+
+kegg_sets <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:KEGG_LEGACY") %>%
+  dplyr::select(gs_name, gene_symbol)
+
+all_gene_sets <- bind_rows(hallmark_sets, kegg_sets)
+```
+
+```{r}
+gene_metadata <- read.csv("tcga_brca_gene_metadata.csv", row.names = 1)
+
+# Build a lookup: Ensembl ID -> gene symbol
+id_to_symbol <- setNames(gene_metadata$gene_name, rownames(gene_metadata))
+
+module_assignments$gene_symbol <- id_to_symbol[module_assignments$gene]
+
+# Check how many mapped successfully
+cat("Mapped:", sum(!is.na(module_assignments$gene_symbol)), 
+    "out of", nrow(module_assignments), "\n")
+
+# Drop anything that didn't map, and use gene_symbol from here on
+module_assignments <- module_assignments[!is.na(module_assignments$gene_symbol), ]
+```
+
+Run ORA (enricher) separately for EACH module
+
+```{r}
+modules <- unique(module_assignments$module)
+
+module_enrichment_results <- list()
+
+for (mod in modules) {
+  genes_in_module <- module_assignments %>%
+    filter(module == mod) %>%
+    pull(gene_symbol)
+  
+  enrich_res <- tryCatch({
+    enricher(
+      gene = genes_in_module,
+      TERM2GENE = all_gene_sets,
+      pvalueCutoff = 0.05,
+      qvalueCutoff = 1
+    )
+  }, error = function(e) NULL)
+  
+  if (!is.null(enrich_res) && nrow(as.data.frame(enrich_res)) > 0) {
+    result_df <- as.data.frame(enrich_res)
+    result_df$module <- mod
+    module_enrichment_results[[mod]] <- result_df
+    cat("\n===", mod, "module (", length(genes_in_module), "genes ) ===\n")
+    print(head(result_df[, c("Description", "GeneRatio", "p.adjust")], 5))
+  } else {
+    cat("\n===", mod, "module: no significant enrichment found ===\n")
+  }
+}
+```
+
+- **Green** = cell cycle/proliferation (G2M Checkpoint, E2F Targets, Cell Cycle -extremely strong, padj\~1e-35). Glycolysis wasn't even in its top 5 hits.
+
+- **Yellow** = immune/inflammation (Interferon Gamma, Inflammatory Response, Cytokine signaling)
+
+- **Red** = ECM/stroma/vasculature (EMT, Focal Adhesion, Angiogenesis, Coagulation)
+
+- **Brown** = estrogen/hormone receptor signaling (Estrogen Response Early/Late)
+
+- **Blue** = cancer signaling pathways (KRAS, WNT, Pathways in Cancer)
+
+- **Turquoise** = mixed, tissue-identity-dominated (Myogenesis, Neuroactive Ligand-Receptor, EMT) — fatty acid/tyrosine/phenylalanine metabolism appear, but well down the list, not the module's defining theme
+
+- **Black** = junction/apoptosis-related, with glycolysis as a minor secondary hit
+
+- **Magenta** = the one clear exception — genuinely, overwhelmingly defined by metabolism (xenobiotic processing, steroid hormone biosynthesis, drug/porphyrin metabolism)
+
+tumor co-expression network is organized primarily around **proliferation, immune activity, stromal remodeling, and hormone signaling** — these are the dominant axes genes actually cluster around.
+
+Metabolic reprogramming in this cohort isn't confined to a single "metabolism module" — it's distributed across the co-expression network, entangled with proliferation (green), hormone signaling (brown), and immune activity (yellow), consistent with the broader biological reality that metabolic rewiring in cancer is deeply coupled to cell growth, immune cell activity, and hormone signaling rather than an independent, isolated process. The one module with a clean, standalone metabolic identity (magenta) represents a specific, distinct axis ,xenobiotic/drug and steroid metabolism ,separate from the proliferation-linked and hormone-linked metabolic signals appearing elsewhere in the network.
+
+```{r}
+magenta_genes <- module_assignments %>% filter(module == "magenta") %>% pull(gene_symbol)
+print(magenta_genes)
+
+# Check specifically for UGT family members
+magenta_genes[grepl("^UGT", magenta_genes)]
+```
+
+```{r}
+all_results <- bind_rows(module_enrichment_results)
+write.csv(all_results, "wgcna_module_enrichment_results.csv", row.names = FALSE)
+```

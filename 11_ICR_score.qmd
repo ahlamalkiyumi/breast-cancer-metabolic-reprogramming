@@ -1,0 +1,267 @@
+---
+title: "ICR"
+format: html
+jupyter: python3
+---
+
+## ICR (Immunologic Constant of Rejection) scoring for TCGA-BRCA
+
+```{python}
+import pandas as pd 
+import numpy as np
+from scipy import stats
+```
+
+```{python}
+counts = pd.read_csv("data_filtered.csv", index_col = 0) #normalized counts data
+sample_metadata = pd.read_csv("sample.csv")
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv", index_col = 0)
+```
+
+```{python}
+subtype = pd.read_csv("sample_metadata_with_subtype.csv", index_col= 1)["BRCA_Subtype_PAM50"]
+mito_score = pd.read_csv("mitochondrial_score_per_sample.csv",index_col=0)
+fao_score = pd.read_csv("mitocarta_pathway_subscores.csv", index_col=0)["Fatty acid oxidation"]
+```
+
+```{python}
+counts.head()
+```
+
+```{python}
+sample_metadata.head()
+
+```
+
+```{python}
+#add gene symbol column in counts and map it to genes_metadata 
+counts["gene_symbol"] = counts.index.map(genes_metadata["gene_name"])
+counts = counts.dropna(subset=["gene_symbol"])
+counts = counts.drop_duplicates(subset=["gene_symbol"], keep="first")
+```
+
+```{python}
+counts = counts.set_index("gene_symbol")
+```
+
+## Define the ICR gene set, grouped by functional category
+
+```{python}
+icr_genes = {
+  "th1_signaling":["IFNG", "TBX21", "IL12B", "STAT1", "IRF1"],
+  "t_cell_markers": ["CD8A", "CD8B"],
+  "chemoattraction": ["CXCL9", "CXCL10", "CCL5"],
+  "cytotoxic_effectors": ["GNLY", "PRF1", "GZMA", "GZMB", "GZMH"],
+  "immune_checkpoint": ["CD274", "PDCD1", "CTLA4", "IDO1", "FOXP3"],
+}
+
+all_icr_genes = [g for group in icr_genes.values() for g in group]
+```
+
+## check if ICR genes in counts genes
+
+```{python}
+def check_gene_coverage(counts: pd.DataFrame) -> list:
+    """Confirm all 20 ICR genes are present before scoring; report any missing."""
+    missing = [g for g in all_icr_genes if g not in counts.index]
+    if missing:
+        print(f"WARNING: {len(missing)} ICR genes not found in expression matrix: {missing}")
+        print("Check gene symbol version (e.g. FOXP3 vs old aliases) or Ensembl ID mapping.")
+    else:
+        print("All 20 ICR genes present.")
+    return missing
+
+missing_genes = check_gene_coverage(counts)
+```
+
+## Compute the composite ICR score per sample
+
+```{python}
+def compute_icr_score(counts: pd.DataFrame) -> pd.DataFrame:
+    
+    # Keep only ICR genes present in your data
+    present_genes = [g for g in all_icr_genes if g in counts.index]
+    icr_expr = counts.loc[present_genes]
+
+    # Z-score normalization per gene
+    #z = (expression − gene_mean_across_samples) / gene_std
+    z = icr_expr.sub(icr_expr.mean(axis=1), axis=0).div(icr_expr.std(axis=1), axis=0)
+
+    #group score = mean(z-scores of its genes)
+    group_scores = {}
+    for group_name, genes in icr_genes.items():
+        genes_present = [g for g in genes if g in z.index]
+        if genes_present:
+            group_scores[group_name] = z.loc[genes_present].mean(axis=0)
+
+    score_df = pd.DataFrame(group_scores)
+
+    # Final ICR score
+    #icr_score = mean(all group scores)
+    score_df["icr_score"] = score_df.mean(axis=1)
+
+    return score_df
+```
+
+```{python}
+score_df = compute_icr_score(counts)
+score_df.head()
+```
+
+```{python}
+def correlate_scores(
+    icr_df: pd.DataFrame,
+    mito_score: pd.Series,
+    faoscore: pd.Series,
+    subtype: pd.Series = None,
+) -> pd.DataFrame:
+    """
+    icr_df: output of compute_icr_score() — must include 'icr_score'
+    mito_score, faoscore: existing per-sample scores, indexed by sample ID
+    subtype: optional PAM50 subtype per sample, for stratified correlation
+ 
+    Returns a tidy table of Spearman rho / p-value, overall and per subtype.
+    """
+    combined = icr_df[["icr_score"]].join(
+        pd.DataFrame({"mito_score": mito_score, "fao_score": faoscore})
+    ).dropna()
+ 
+    results = []
+ 
+    def _corr_block(df, label):
+        for target_col in ["mito_score", "fao_score"]:
+            rho, p = stats.spearmanr(df["icr_score"], df[target_col])
+            results.append(
+                {"group": label, "vs": target_col, "n": len(df), "rho": rho, "p": p}
+            )
+ 
+    _corr_block(combined, "overall")
+ 
+    if subtype is not None:
+        combined = combined.join(subtype.rename("subtype"))
+        for subtype_name, sub_df in combined.groupby("subtype"):
+            _corr_block(sub_df, subtype_name)
+ 
+    return pd.DataFrame(results)
+```
+
+```{python}
+icr_df = score_df[["icr_score"]]
+mito_score = mito_score.squeeze()
+corr_results = correlate_scores(icr_df , mito_score, fao_score, subtype)
+corr_results
+```
+
+Basal-like tumors specifically, higher FAO activity associates with a *more* immune-active (immune-hot) phenotype 
+
+```{python}
+icr_df.to_csv("icr_df.csv")
+fao_score.to_csv("fao_score.csv")
+```
+
+## Prepare data for gsea
+
+```{python}
+basal_samples = subtype[subtype == "Basal"].index
+counts_basal = counts[basal_samples]
+fao_basal = fao_score.loc[basal_samples]
+```
+
+```{python}
+counts_basal
+```
+
+```{python}
+threshold = fao_basal.median()
+group = pd.Series(["FAO_high" if x >= threshold else "FAO_low" for x in fao_basal], index=fao_basal.index)
+
+group.value_counts()
+```
+
+```{python}
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+from pydeseq2.default_inference import DefaultInference
+```
+
+```{python}
+sample_metadata  = sample_metadata .rename(columns={"tcga.cgc_sample_sample_type": "condition"})
+```
+
+```{python}
+counts = counts.apply(pd.to_numeric, errors="coerce")
+
+```
+
+```{python}
+sample_metadata = sample_metadata.set_index("tcga.tcga_barcode")
+```
+
+```{python}
+counts_df = counts.T
+dds = DeseqDataSet(
+    counts=counts_df,
+    metadata=sample_metadata,
+    design_factors="condition",
+    refit_cooks=True,
+)
+
+dds.deseq2()   # fits size factors, dispersions, normalizes — this populates dds.layers["normed_counts"]
+```
+
+```{python}
+print(counts.columns[:5])
+print(sample_metadata.index[:5])
+```
+
+```{python}
+
+from scipy.stats import ranksums
+
+normed_counts = pd.DataFrame(
+    dds.layers["normed_counts"],
+    index=dds.obs_names,      # samples
+    columns=dds.var_names,    # genes
+)
+counts_basal_normed = normed_counts.loc[basal_samples]
+
+expr = counts_basal_normed            
+expr_log = np.log2(expr + 1)         
+ 
+#Wilcoxon rank-sum per gene
+results = []
+for gene in expr.columns:
+    high = expr.loc[group == "FAO_high", gene]        
+    low  = expr.loc[group == "FAO_low", gene]
+ 
+    high_log = expr_log.loc[group == "FAO_high", gene]  
+    low_log  = expr_log.loc[group == "FAO_low", gene]
+ 
+    stat, p = ranksums(high, low)
+ 
+    results.append({
+        "gene": gene,
+        "stat": stat,
+        "p": p,
+        "logFC": high_log.mean() - low_log.mean(),      
+    })
+ 
+de_results = pd.DataFrame(results).set_index("gene")
+```
+
+```{python}
+from statsmodels.stats.multitest import multipletests
+
+de_results["padj"] = multipletests(de_results["p"], method="fdr_bh")[1]
+
+de_results = de_results.sort_values("padj")
+de_results.head()
+```
+
+```{python}
+de_results.to_csv("de_results.csv")
+```
+
+```{python}
+counts_basal_normed.to_csv("counts_basal_normed.csv")
+```

@@ -1,0 +1,56 @@
+---
+title: "estimate_scores"
+format: html
+---
+
+## Quarto
+
+```{python}
+import pingouin as pg
+```
+
+```{python}
+import pandas as pd
+
+scores = pd.read_csv("basal_estimate_scores.gct", sep="\t", skiprows=2, index_col=0)
+scores = scores.drop(columns=["Description"]).T
+scores.columns = ["StromalScore", "ImmuneScore", "ESTIMATEScore"]   # 3, not 4
+
+purity_proxy = scores["ImmuneScore"]
+```
+
+```{python}
+icr_score = pd.read_csv("icr_df.csv", index_col=0)
+fao_score = pd.read_csv("fao_score.csv", index_col=0)
+```
+
+```{python}
+icr_s = icr_score.squeeze()
+fao_s = fao_score.squeeze()
+
+print(icr_s.index[:5].tolist())
+print(purity_proxy.index[:5].tolist())
+```
+
+```{python}
+purity_proxy.index = purity_proxy.index.str.replace(".", "-", regex=False)
+
+print(purity_proxy.index[:5].tolist())   # should now look like TCGA-E9-A249-01A-11R-A169-07
+```
+
+```{python}
+df = pd.DataFrame({
+    "icr": icr_s,
+    "fao": fao_s,
+    "purity": purity_proxy,
+}).dropna()
+
+print(df.shape)   # should now land close to 197
+```
+
+```{python}
+result = pg.partial_corr(data=df, x="icr", y="fao", covar="purity", method="spearman")
+print(result)
+```
+
+The partial correlation (rho=0.31, p=0.000009) is **essentially unchanged from the raw correlation** (rho=0.28, p=0.000065) . The FAO–ICR relationship in Basal-like tumors is **not explained by immune cell infiltration/composition**. It survives adjustment for how much immune/stromal tissue is simply present in the sample.

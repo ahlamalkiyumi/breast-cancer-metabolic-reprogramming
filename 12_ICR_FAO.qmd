@@ -1,0 +1,156 @@
+---
+title: "ICR–FAO"
+format: html
+execute:
+  python: /Users/air/bioenv311/bin/python
+---
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/Users/air/bioenv311/bin/python")
+
+library(reticulate)
+
+py_config()
+```
+
+## What pathways drive the ICR–FAO relationship in Basal tumors?
+
+```{python}
+import pandas as pd 
+import numpy as np
+from scipy import stats
+```
+
+```{python}
+de_results = pd.read_csv("de_results.csv", index_col = 0)
+de_results.head()
+```
+
+## Create ranked gene list for GSEA
+
+```{python}
+mitopathways = pd.read_excel(
+    "Human.MitoCarta3.0.xls",
+    sheet_name="C MitoPathways"
+)
+
+print(mitopathways.columns.tolist())
+```
+
+```{python}
+mitopathways = pd.read_excel(
+    "Human.MitoCarta3.0.xls",
+    sheet_name="C MitoPathways"
+)
+fao_genes = mitopathways.loc[
+    mitopathways["MitoPathway"] == "Fatty acid oxidation","Genes"].dropna().tolist()
+```
+
+```{python}
+fao_genes
+```
+
+```{python}
+icr_genes = [
+    "IFNG","TBX21","IL12B","STAT1","IRF1",
+    "CD8A","CD8B",
+    "CXCL9","CXCL10","CCL5",
+    "GNLY","PRF1","GZMA","GZMB","GZMH",
+    "CD274","PDCD1","CTLA4","IDO1","FOXP3",
+]
+genes_to_exclude = set(icr_genes) | set(fao_genes)
+de_filtered = de_results.loc[~de_results.index.isin(genes_to_exclude)]
+ranking = de_filtered["logFC"] * -np.log10(de_filtered["p"])
+ranking = ranking.sort_values(ascending=False)
+```
+
+## Run GSEA
+
+```{python}
+
+import gseapy as gp
+
+
+gsea_res = gp.prerank(
+    rnk=ranking,
+    gene_sets="MSigDB_Hallmark_2020", 
+    outdir="gsea_basal_fao_normed",
+    permutation_num=1000,
+    seed=42,
+    verbose=True
+)
+```
+
+```{python}
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_colwidth", None)
+pd.set_option("display.width", None)
+```
+
+## Top significant pathways
+
+```{python}
+gsea_res.res2d.sort_values("FDR q-val").head(10)
+```
+
+```{python}
+sig = gsea_res.res2d[gsea_res.res2d["FDR q-val"] < 0.05]
+
+sig[["Term", "NES", "FDR q-val", "Lead_genes"]].head(15)
+```
+
+- **FAO-high Basal-like tumors (**immune-hot)**:** interferon/antigen-presentation, OXPHOS, adipogenesis, fatty acid metabolism - all up
+
+- **FAO-low Basal-like tumors(**immune-cold)**:** EMT, hypoxia, glycolysis, angiogenesis, TGF-beta, NF-kB, proliferation markers - all up
+
+- FAO-low tumors look more like classic aggressive, oxygen-starved, sugar-burning, invasive tumors; FAO-high tumors look more oxidative, calmer, and more visible to the immune system. 
+
+```{python}
+#Print one pathway
+row = gsea_res.res2d.iloc[0]
+
+print("Pathway:", row["Term"])
+print("NES:", row["NES"])
+print("FDR:", row["FDR q-val"])
+print("Genes:", row["Lead_genes"].split(";"))
+```
+
+```{python}
+gsea_res.res2d.to_csv("gsea_results_full.csv")
+```
+
+```{python}
+def check_pathway_gene_overlap(gsea_res, genes_to_exclude) -> pd.DataFrame:
+    """
+    genes_to_exclude: the same set we built for the ranking step
+                       (icr_genes | fao_genes), to confirm none of them
+                       leaked into the significant pathway hits.
+    """
+    res2d = gsea_res.res2d.copy()
+    rows = []
+    for _, row in res2d.iterrows():
+        leading_edge = set(row["Lead_genes"].split(";"))
+        overlap = sorted(leading_edge & genes_to_exclude)
+        rows.append({
+            "Term": row["Term"],
+            "NES": row["NES"],
+            "FDR q-val": row["FDR q-val"],
+            "n_leading_edge": len(leading_edge),
+            "n_overlap_excluded": len(overlap),
+            "overlapping_genes": ", ".join(overlap) if overlap else "-",
+        })
+    overlap_df = pd.DataFrame(rows).sort_values("FDR q-val")
+
+    if overlap_df["n_overlap_excluded"].sum() == 0:
+        print("Clean: no leading-edge genes overlap with icr_genes/fao_genes.")
+    else:
+        print("Check flagged terms below — some leading-edge genes overlap excluded genes.")
+    return overlap_df
+
+
+overlap_check = check_pathway_gene_overlap(gsea_res, genes_to_exclude)
+overlap_check.head(10)
+```
+
+no overlap

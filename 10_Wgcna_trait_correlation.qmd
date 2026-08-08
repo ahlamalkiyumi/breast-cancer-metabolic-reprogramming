@@ -1,0 +1,112 @@
+---
+title: "10_Wgcna_trait_correlation"
+format: html
+---
+
+## Wgcna module trait correlation
+
+A module eigengene (ME) is a single summary value per sample per module, essentially "the first principal component" of that \# module's genes. Instead of 1,274 genes in turquoise, you get ONE number per sample representing that module's overall activity.
+
+This lets you correlate whole modules against each other and against traits directly, answering:
+
+\- Does the proliferation module (green) correlate with metabolic scores, supporting "proliferation drives metabolic rewiring"?
+
+\- Does the immune module (yellow) correlate with metabolic scores, supporting "immune cell metabolism contributes to the signal"?
+
+\- Does the hormone module (brown) correlate with metabolic scores?
+
+```{r}
+library(WGCNA)
+library(dplyr)
+```
+
+## Step 1: Recompute module eigengenes from your existing network
+
+```{r}
+counts_filtered <- read.csv("data_filtered.csv", row.names = 1)
+log_expr <- log2(counts_filtered + 1)
+expr_for_wgcna_full <- as.data.frame(t(log_expr))
+```
+
+```{r}
+# Re-apply the SAME top-5000-most-variable-genes filter used in Step 1
+gene_var <- apply(expr_for_wgcna_full, 2, var)
+top_genes <- names(sort(gene_var, decreasing = TRUE))[1:5000]
+expr_for_wgcna <- expr_for_wgcna_full[, top_genes]
+
+# Now this should have exactly 5000 columns, matching module_colors
+cat("expr_for_wgcna columns:", ncol(expr_for_wgcna), "\n")
+cat("module_colors length:", length(module_colors), "\n")
+# These two numbers MUST match before proceeding
+```
+
+```{r}
+MEs <- moduleEigengenes(expr_for_wgcna, colors =module_colors )$eigengenes
+MEs <- orderMEs(MEs)# reorders so similar modules sit near each other
+MEs <- MEs[,colnames(MEs) !="MEgrey"]
+```
+
+```{r}
+head(MEs,5)
+```
+
+##Step 2: Module-vs-module correlation (does proliferation track with metabolism, does immune track with metabolism, etc.)
+
+```{r}
+me_cor <- cor(MEs, use = "pairwise.complete.obs")
+me_cor_pval <- corPvalueStudent(me_cor, nSamples = nrow(MEs))
+```
+
+```{r}
+head(me_cor_pval, 5)
+```
+
+```{r}
+labeledHeatmap(
+  Matrix = me_cor,
+  xLabels = colnames(MEs),
+  yLabels = colnames(MEs),
+  colorLabels = FALSE,
+  colors = blueWhiteRed(50),
+  textMatrix = round(me_cor, 2),
+  setStdMargins = FALSE,
+  cex.text = 0.6,
+  main = "Module-Module Eigengene Correlation"
+)
+```
+
+## Step 3: Bring existing MitoCarta scores + clinical traits
+
+```{r}
+sample_meta <- read.csv("sample.csv", row.names = 1)
+mito_score <- read.csv("mitochondrial_score_per_sample.csv", row.names = 1)
+pathway_scores <- read.csv("mitocarta_pathway_subscores.csv", row.names = 1)
+```
+
+align everything to the same sample set as MEs
+
+```{r}
+rownames(MEs) <- gsub("\\.", "-", rownames(MEs))
+common_samples <- intersect(rownames(MEs), rownames(sample_meta))
+MEs_aligned <- MEs[common_samples,]
+```
+
+build trait matrix: tumor/normal (binary), subtype, FAO score, overall mito score
+
+```{r}
+traits <- data.frame(row.names = common_samples)
+traits$is_tumor <- ifelse(sample_meta[common_samples, "tcga.cgc_sample_sample_type"] == "Primary Tumor", 1, 0)
+traits$mito_score <- mito_score[common_samples,1]
+```
+
+```{r}
+module_trait_cor <- cor(MEs_aligned, traits, use = "pairwise.complete.obs")
+module_trait_pval <- corPvalueStudent(module_trait_cor, nSamples = nrow(traits))
+```
+
+```{r}
+module_trait_cor
+module_trait_pval 
+```
+
+As shown in the table, the green module (cell cycle/proliferation genes: E2F Targets, G2M Checkpoint) shows a moderately strong positive correlation with tumor status (r=0.60) and a weaker but still positive correlation with the overall mitochondrial score (r=0.29) — consistent with proliferation being coupled to increased mitochondrial biogenesis. The black module shows the strongest correlation with mitochondrial score of any module (r=0.55, moderate-to-moderately-strong), despite its earlier enrichment results (tight junction, apoptosis, estrogen response, with glycolysis as a minor secondary hit) not obviously pointing to a mitochondrial identity — this relationship is statistically robust (p\~1e-96) but unexplained by the module's current annotation, and worth investigating further (by examining its hub genes) rather than treated as resolved.

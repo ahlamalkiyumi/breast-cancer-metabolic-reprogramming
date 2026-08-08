@@ -1,0 +1,74 @@
+---
+title: "13_estimate"
+format: html
+editor: visual
+---
+
+Tumors with more immune cells might naturally have:
+
+- Higher **ICR score** (more immune genes)
+
+- And possibly different **FAO levels**
+
+So the concern is: Maybe FAO and ICR look correlated just because some tumors have more immune cells overall.
+
+What partial correlation does? It **removes the effect of immune cell abundance** (using ESTIMATE ImmuneScore)
+
+**ESTIMATE ImmuneScore:** It is a transcriptomic estimate of how much immune-cell signal is present in a bulk tumor sample
+
+## ESTIMATE Setup
+
+```{r}
+# ESTIMATE isn't on CRAN — install from R-Forge
+install.packages("estimate", repos = "http://r-forge.r-project.org", type = "source")
+```
+
+```{r}
+library(estimate)
+```
+
+```{r}
+expr_matrix <- read.csv("counts_basal_normed.csv")
+```
+
+```{r}
+head(expr_matrix, 5)
+```
+
+```{r}
+# Move the barcode column into rownames
+rownames(expr_matrix) <- expr_matrix$tcga.tcga_barcode
+
+# Drop it so it's not treated as a "gene"
+expr_matrix$tcga.tcga_barcode <- NULL
+
+# NOW transpose — genes end up as rows, real barcodes as columns
+expr_matrix_t <- t(expr_matrix)
+
+#head(expr_matrix_t, 5)    # check what these look like now
+```
+
+```{r}
+write.table(expr_matrix_t, "basal_expr_for_estimate.txt",
+            sep = "\t", quote = FALSE, col.names = NA)
+
+# filter to the ~10,000 common genes ESTIMATE uses, output a .gct file
+filterCommonGenes(
+  input.f = "basal_expr_for_estimate.txt",
+  output.f = "basal_expr_filtered.gct",
+  id = "GeneSymbol"
+)
+
+#compute scores
+estimateScore(
+  input.ds = "basal_expr_filtered.gct",
+  output.ds = "basal_estimate_scores.gct",
+  platform = "illumina"   # correct default for RNA-seq data, not just microarray
+)
+```
+
+```{r}
+scores_check <- read.table("basal_estimate_scores.gct", sep = "\t", skip = 2, header = TRUE, row.names = 1)
+dim(scores_check)   # should be 4 rows (Stromal, Immune, ESTIMATE, TumorPurity) x n_samples
+head(scores_check[, 1:5])
+```
