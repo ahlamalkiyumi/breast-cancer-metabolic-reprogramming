@@ -2,19 +2,12 @@
 
 ## Background
 
-Cancer cells don't just grow uncontrollably, they often rewire how they
-produce energy. Back in the 1920s, Otto Warburg noticed that tumor cells
-tend to rely heavily on glycolysis (fermenting glucose) for energy, even
-when there's plenty of oxygen around to use the more efficient
-mitochondrial pathway instead. This shift, now known as the Warburg
-effect, has been observed across many cancer types since. I wanted to
-see if I could find this same pattern myself, starting from raw public
-RNA-seq data, rather than just reading about it.
+Cancer cells don't just grow uncontrollably—they often rewire how they produce and use energy. Back in the 1920s, Otto Warburg noticed that tumor cells tend to rely heavily on glycolysis (fermenting glucose) for energy, even when there's plenty of oxygen available for the more efficient mitochondrial pathway instead. This shift, now known as the **Warburg effect**, has been observed across many cancer types since.
 
-Metabolic health and mitochondrial function are areas I'm especially
-interested in, so breast cancer where this kind of metabolic
-rewiring is well documented but still an active area of research,
-felt like a natural place to start applying that interest.
+But cancer metabolism isn't simply a switch from glycolysis to mitochondrial respiration. Tumor cells can rewire multiple metabolic pathways depending on their needs and environment. I wanted to see if I could uncover some of these metabolic changes myself, starting from raw public RNA-seq data rather than just reading about them.
+
+Metabolic health and mitochondrial function are areas I'm especially interested in, so **breast cancer**, where metabolic rewiring is well documented but still an active area of research, felt like a natural place to start. As I explored the data, my focus expanded from metabolism alone to asking how these metabolic states might relate to other features of the tumor, particularly its immune state and molecular subtype.
+
 
 ## The question
 
