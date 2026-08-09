@@ -42,8 +42,7 @@ By doing subtype stratification of mitochondrial pathways scores, Luminal B brea
 
 The co-expression network resolved into distinct modules aligned with proliferation (cell cycle genes), hormone signaling (estrogen response), immune activity, and stromal/ECM remodeling — showing that metabolic signal in this cohort is not an isolated program but distributed across multiple co-expression modules. Module-trait correlation showed proliferation and hormone-signaling modules each had a real, moderate association with mitochondrial pathway scores.
 
-
-
+In Basal-like TCGA-BRCA tumors, a mitochondrial fatty acid oxidation (FAO) score built from MitoCarta3.0 correlated positively with the ICR immune signature (Spearman ρ=0.31, p<0.0001), and this relationship held after controlling for immune/stromal infiltration (ESTIMATE ImmuneScore), suggesting it isn't simply explained by immune cell composition. A non-circular GSEA (excluding both the ICR and FAO gene sets from the ranking) showed FAO-high Basal tumors carry a coherent interferon/antigen-presentation and oxidative metabolism signature, while FAO-low tumors trend toward hypoxia, glycolysis, angiogenesis, and EMT — with zero gene overlap confirming the pattern isn't an artifact of the scoring itself.
 
 
 ## Tools used
