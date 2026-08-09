@@ -40,6 +40,10 @@ Using MitoCarta3.0, Breast cancer mitochondria display a shift from metabolicall
 
 By doing subtype stratification of mitochondrial pathways scores, Luminal B breast tumors exhibit coordinated upregulation of mitochondrial protein import, translation, and cristae organization, supporting enhanced oxidative phosphorylation and fatty acid oxidation, while simultaneously downregulating antioxidant and iron homeostasis pathways, suggesting a high-energy but potentially redox-vulnerable mitochondrial state.
 
+The co-expression network resolved into distinct modules aligned with proliferation (cell cycle genes), hormone signaling (estrogen response), immune activity, and stromal/ECM remodeling — showing that metabolic signal in this cohort is not an isolated program but distributed across multiple co-expression modules. Module-trait correlation showed proliferation and hormone-signaling modules each had a real, moderate association with mitochondrial pathway scores.
+
+
+
 
 
 ## Tools used
