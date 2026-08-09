@@ -48,8 +48,8 @@ In Basal-like TCGA-BRCA tumors, a mitochondrial fatty acid oxidation (FAO) score
 ## Tools used
 
 
-Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn, kruskal-wallis, dunn's test
-R: clusterProfiler, msigdbr, ggplot2
-other: MitoCarta3.0
+Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn, kruskal-wallis, dunn's test, pingouin, scipy
+R: clusterProfiler, msigdbr, ggplot2, WGCNA, estimate
+other: MitoCarta3.0, ICR 20-gene signature
 Notebooks written in Quarto (.qmd), mixing both languages in a
 single reproducible workflow
