@@ -1,0 +1,243 @@
+---
+title: "METABRIC Validation"
+format: html
+---
+
+## Goal
+
+Confirm we can get METABRIC's expression + clinical data, and check how many of our FAO (MitoCarta) and ICR signature genes are actually present in METABRIC's microarray platform, before attempting to recompute any scores.
+
+```{python}
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import requests
+from scipy import stats
+from scipy.stats import spearmanr
+```
+
+```{python}
+BASE_URL = "https://www.cbioportal.org/api"
+STUDY_ID = "brca_metabric"
+
+# Confirm the study exists and check available molecular profiles
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/molecular-profiles")
+molecular_profiles = pd.DataFrame(response.json())
+print("Available molecular profiles for METABRIC:")
+print(molecular_profiles[["molecularProfileId", "molecularAlterationType", "name"]])
+
+```
+
+Load clinical/sample data (need PAM50 subtype labels)
+
+```{python}
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/clinical-data?clinicalDataType=SAMPLE")
+clinical_raw = pd.DataFrame(response.json())
+ 
+
+clinical = clinical_raw.pivot(index="sampleId", columns="clinicalAttributeId", values="value")
+ 
+print(f"\nClinical data shape: {clinical.shape}")
+print("\nLooking for PAM50-related columns:")
+pam50_cols = [c for c in clinical.columns if "PAM50" in c.upper() or "SUBTYPE" in c.upper()]
+print(pam50_cols)
+ 
+if pam50_cols:
+    print(f"\nValue counts for {pam50_cols[0]}:")
+    print(clinical[pam50_cols[0]].value_counts())
+```
+
+```{python}
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/clinical-data?clinicalDataType=PATIENT")
+clinical_patient = pd.DataFrame(response.json())
+clinical_patient_wide = clinical_patient.pivot(index="patientId", columns="clinicalAttributeId", values="value")
+print(clinical_patient_wide.columns.tolist())
+```
+
+```{python}
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/clinical-attributes")
+attributes = pd.DataFrame(response.json())
+ 
+print(f"Total clinical attributes available: {len(attributes)}\n")
+print(attributes[["clinicalAttributeId", "displayName", "datatype"]].to_string())
+```
+
+```{python}
+clinical_patient_wide["CLAUDIN_SUBTYPE"].value_counts()
+```
+
+mRNA molecular profile ID
+
+```{python}
+MRNA_PROFILE_ID = "brca_metabric_mrna_median_all_sample_Zscores"   # pre-computed z-scores, relative to full cohort
+```
+
+Get the Basal-like sample list
+
+```{python}
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/clinical-data?clinicalDataType=PATIENT")
+clinical_patient = pd.DataFrame(response.json())
+clinical_wide = clinical_patient.pivot(index="patientId", columns="clinicalAttributeId", values="value")
+ 
+basal_patients = clinical_wide[clinical_wide["CLAUDIN_SUBTYPE"] == "Basal"].index.tolist()
+print(f"\nBasal-like patients: {len(basal_patients)}")
+ 
+# Need SAMPLE ids (not patient ids) for the expression query -- get the
+# mapping via the samples endpoint
+response = requests.get(f"{BASE_URL}/studies/{STUDY_ID}/samples")
+samples_df = pd.DataFrame(response.json())
+basal_samples = samples_df[samples_df["patientId"].isin(basal_patients)]["sampleId"].tolist()
+print(f"Basal-like samples (matched to sample IDs): {len(basal_samples)}")
+```
+
+```{python}
+basal_samples
+```
+
+Define gene sets
+
+Fetch expression data for just these genes, just these samples
+
+```{python}
+# Get Entrez/internal gene IDs first (cBioPortal's expression endpoint
+# wants gene IDs, not symbols, for the fetch call)
+gene_response = requests.post(
+    f"{BASE_URL}/genes/fetch",
+    json=all_genes_needed,
+    params={"geneIdType": "HUGO_GENE_SYMBOL"}
+)
+gene_info = pd.DataFrame(gene_response.json())
+symbol_to_entrez = dict(zip(gene_info["hugoGeneSymbol"], gene_info["entrezGeneId"]))
+print(f"\nResolved {len(symbol_to_entrez)} of {len(all_genes_needed)} gene symbols to Entrez IDs")
+ 
+# Fetch expression values: molecular-profiles/{id}/molecular-data/fetch
+expr_request_body = {
+    "entrezGeneIds": list(symbol_to_entrez.values()),
+    "sampleIds": basal_samples
+}
+expr_response = requests.post(
+    f"{BASE_URL}/molecular-profiles/{MRNA_PROFILE_ID}/molecular-data/fetch",
+    json=expr_request_body,
+    params={"projection": "SUMMARY"}
+)
+expr_data = pd.DataFrame(expr_response.json())
+print(f"\nExpression data pulled: {expr_data.shape[0]} rows")
+print(expr_data.head())
+ 
+# Pivot to genes x samples
+entrez_to_symbol = {v: k for k, v in symbol_to_entrez.items()}
+expr_data["gene_symbol"] = expr_data["entrezGeneId"].map(entrez_to_symbol)
+expr_matrix = expr_data.pivot(index="gene_symbol", columns="sampleId", values="value")
+expr_matrix = expr_matrix.apply(pd.to_numeric, errors="coerce")
+ 
+print(f"\nExpression matrix shape (genes x samples): {expr_matrix.shape}")
+```
+
+```{python}
+expr_matrix.head()
+```
+
+```{python}
+expr_matrix.to_csv("metabric_data.csv")
+```
+
+Compute FAO and ICR scores
+
+```{python}
+def compute_signature_score(expr_matrix, gene_list):
+    genes_present = [g for g in gene_list if g in expr_matrix.index]
+    print(f"  {len(genes_present)} of {len(gene_list)} genes found in METABRIC data")
+    sub_expr = expr_matrix.loc[genes_present]
+    return sub_expr.mean(axis=0)   # already z-scored by cBioPortal -- just average
+ 
+print("\nComputing FAO score:")
+fao_score_metabric = compute_signature_score(expr_matrix, fao_genes)
+ 
+print("Computing ICR score:")
+icr_score_metabric = compute_signature_score(expr_matrix, icr_genes)
+```
+
+THE VALIDATION TEST -- does the correlation replicate?
+
+```{python}
+combined = pd.DataFrame({
+    "fao_score": fao_score_metabric,
+    "icr_score": icr_score_metabric
+}).dropna()
+ 
+rho, pval = spearmanr(combined["fao_score"], combined["icr_score"])
+ 
+print("\n" + "=" * 60)
+print("METABRIC VALIDATION RESULT")
+print("=" * 60)
+print(f"Basal-like tumors (METABRIC): n={len(combined)}")
+print(f"Spearman rho={rho:.3f}, p={pval:.2e}")
+print(f"\nCompare to TCGA-BRCA original: rho=0.28, p=6.5e-05, n=197")
+ 
+#combined.to_csv("metabric_basal_fao_icr_scores.csv")
+```
+
+the relationship identified in TCGA-BRCA (rho=0.28) was not replicated in an independent microarray-based cohort (METABRIC, rho=-0.16), suggesting the relationship may be specific to this dataset, this technology platform, or requires further investigation into probe-level or population differences
+
+Scatter plot
+
+```{python}
+plt.figure(figsize=(7, 6))
+sns.regplot(
+    data=combined, x="fao_score", y="icr_score",
+    scatter_kws={"alpha": 0.5, "s": 25}, line_kws={"color": "firebrick"}
+)
+rho, pval = spearmanr(combined["fao_score"], combined["icr_score"])
+plt.title(f"METABRIC: FAO vs. ICR score, Basal-like tumors\n"
+          f"Spearman rho={rho:.3f}, p={pval:.2e}, n={len(combined)}")
+plt.xlabel("Fatty Acid Oxidation score (z-score avg)")
+plt.ylabel("ICR (immune signature) score (z-score avg)")
+plt.tight_layout()
+#plt.savefig("metabric_fao_icr_scatter.png", dpi=150)
+plt.show()
+```
+
+Check gene-level coverage in detail -- how many FAO/ICR genes actually had real (non-NaN) expression values in the pulled data,not just how many resolved to an Entrez ID
+
+```{python}
+fao_genes_in_matrix = [g for g in fao_genes if g in expr_matrix.index]
+fao_genes_with_data = expr_matrix.loc[fao_genes_in_matrix].notna().sum(axis=1)
+ 
+print("=== FAO gene coverage detail ===")
+print(f"FAO genes in expr_matrix index: {len(fao_genes_in_matrix)} of {len(fao_genes)}")
+print("\nPer-gene non-missing sample counts (out of", combined.shape[0], "samples):")
+print(fao_genes_with_data.sort_values())
+ 
+icr_genes_in_matrix = [g for g in icr_genes if g in expr_matrix.index]
+icr_genes_with_data = expr_matrix.loc[icr_genes_in_matrix].notna().sum(axis=1)
+print("\n=== ICR gene coverage detail ===")
+print(icr_genes_with_data.sort_values())
+```
+
+Check each individual FAO gene's own correlation with ICR score -- is the negative result coming from most genes, or is it being driven by a small number of genes behaving oppositely?
+
+```{python}
+print("\n=== Individual FAO gene correlation with ICR score ===")
+individual_results = []
+for gene in fao_genes_in_matrix:
+    gene_vals = expr_matrix.loc[gene, combined.index]
+    valid = gene_vals.notna() & combined["icr_score"].notna()
+    if valid.sum() < 20:
+        continue
+    r, p = spearmanr(gene_vals[valid], combined.loc[valid, "icr_score"])
+    individual_results.append({"gene": gene, "rho": r, "pvalue": p})
+ 
+individual_df = pd.DataFrame(individual_results).sort_values("rho")
+print(individual_df.to_string())
+ 
+n_negative = (individual_df["rho"] < 0).sum()
+n_positive = (individual_df["rho"] > 0).sum()
+print(f"\n{n_negative} of {len(individual_df)} FAO genes individually correlate "
+      f"NEGATIVELY with ICR score")
+print(f"{n_positive} of {len(individual_df)} FAO genes individually correlate "
+      f"POSITIVELY with ICR score")
+
+```
+
+The FAO-ICR relationship identified in TCGA-BRCA (rho=0.28, Basal-like tumors) did not replicate in an independent cohort (METABRIC, rho=-0.16, Basal-like tumors) — the direction reversed. This reversal is consistent across most individual FAO pathway genes (29 of 44 trend negative in METABRIC), ruling out a computational artifact or a small number of outlier genes as the explanation. Candidate explanations include differences in measurement technology (RNA-seq vs. microarray) and population differences between cohorts; this discordance is itself a relevant finding, highlighting that single-cohort metabolic-immune associations in cancer transcriptomics require independent validation before being treated as generalizable.

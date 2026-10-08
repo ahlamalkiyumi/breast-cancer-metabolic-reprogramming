@@ -1,0 +1,263 @@
+---
+title: "d"
+format: html
+editor: visual
+---
+
+```{r}
+install.packages("data.table")
+library(data.table)
+
+expr_data <- fread("GSE96058_data.csv")
+```
+
+```{r}
+dim(expr_data)
+colnames(expr_data)[1:10]
+expr_data[1:5, 1:5]
+```
+
+```{r}
+
+meta1 <- read.delim("GSE96058-GPL11154_series_matrix.txt", header = TRUE)
+meta2 <- read.delim("GSE96058-GPL18573_series_matrix.txt", header = TRUE)
+```
+
+```{r}
+identical(colnames(meta1), colnames(meta2))
+```
+
+```{r}
+# Read the raw lines directly
+lines <- readLines(gzfile("GSE96058-GPL11154_series_matrix.txt"))
+
+# Clinical/sample characteristic lines all start with "!Sample_"
+sample_lines <- grep("^!Sample_", lines, value = TRUE)
+
+# Look at what fields are available first
+sample_field_names <- sub("\t.*", "", sample_lines)
+print(unique(sample_field_names))
+```
+
+```{r}
+characteristics_lines <- lines[grepl("^!Sample_characteristics_ch1", lines)]
+print(length(characteristics_lines))   # how many separate characteristic rows exist
+
+# Look at the first few values in EACH characteristics line to identify
+# which one is PAM50 subtype
+for (i in seq_along(characteristics_lines)) {
+  values <- strsplit(characteristics_lines[i], "\t")[[1]]
+  cat("Row", i, ":", values[2], "\n")   # print just the first sample's value for a quick look
+}
+```
+
+Extract the full clinical table
+
+```{r}
+extract_field <- function(lines, field_name) {
+  line <- lines[grepl(paste0("^", field_name, "\t"), lines)]
+  values <- strsplit(line, "\t")[[1]][-1]
+  gsub('"', '', values)
+}
+
+clinical_df <- data.frame(
+  geo_accession = extract_field(lines, "!Sample_geo_accession"),
+  scanb_id = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines[1], "\t")[[1]][-1])),
+  pam50_subtype = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines[21], "\t")[[1]][-1])),
+  er_status = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines[7], "\t")[[1]][-1])),
+  her2_status = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines[9], "\t")[[1]][-1]))
+)
+
+table(clinical_df$pam50_subtype)
+head(clinical_df)
+```
+
+```{r}
+lines2 <- readLines(gzfile("GSE96058-GPL18573_series_matrix.txt"))
+```
+
+Pull out its characteristics lines -- IMPORTANT: don't assume the row order matches the first file. GEO doesn't guarantee the same characteristic appears in the same row number across different platform submissions within the same series. Check first.
+
+```{r}
+characteristics_lines2 <- lines2[grepl("^!Sample_characteristics_ch1", lines2)]
+print(length(characteristics_lines2))
+
+for (i in seq_along(characteristics_lines2)) {
+  values <- strsplit(characteristics_lines2[i], "\t")[[1]]
+  cat("Row", i, ":", values[2], "\n")
+}
+```
+
+confirmed which row number holds PAM50 subtype,
+
+```{r}
+clinical_df2 <- data.frame(
+  geo_accession = extract_field(lines2, "!Sample_geo_accession"),
+  scanb_id = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines2[1], "\t")[[1]][-1])),
+  pam50_subtype = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines2[21], "\t")[[1]][-1])),
+  er_status = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines2[7], "\t")[[1]][-1])),
+  her2_status = gsub(".*: ", "", gsub('"', '', strsplit(characteristics_lines2[9], "\t")[[1]][-1]))
+)
+
+table(clinical_df2$pam50_subtype)
+head(clinical_df2)
+```
+
+combine
+
+```{r}
+clinical_combined <- rbind(clinical_df, clinical_df2)
+
+cat("\n=== Combined clinical data ===\n")
+cat("Total samples:", nrow(clinical_combined), "\n")
+print(table(clinical_combined$pam50_subtype))
+```
+
+```{r}
+write.csv(clinical_combined, "gse96058_clinical_combined.csv", row.names = FALSE)
+```
+
+```{r}
+# Check what geo_accession and scanb_id actually look like
+head(clinical_combined$geo_accession)
+head(clinical_combined$scanb_id)
+
+# Compare against your expression matrix's actual column names
+colnames(expr_data)[1:10]
+```
+
+```{r}
+titles <- extract_field(lines, "!Sample_title")
+head(titles)
+```
+
+Add it to clinical table and merge:
+
+```{r}
+# Does column count match sample count, in the same order GEO listed them?
+length(colnames(expr_data)) - 1   # minus 1 for the V1 gene-name column
+nrow(clinical_combined)
+```
+
+```{r}
+dim(clinical_df)
+dim(clinical_df2)
+colnames(clinical_df)
+colnames(clinical_df2)
+```
+
+`clinical_df2` is simply missing the `sample_title`
+
+```{r}
+# Make sure you're reading the SECOND file's lines here, not the first's
+lines2 <- readLines(gzfile("GSE96058-GPL18573_series_matrix.txt"))
+
+titles2 <- extract_field(lines2, "!Sample_title")
+clinical_df2$sample_title <- titles2
+
+# Now both should have matching columns
+dim(clinical_df2)
+colnames(clinical_df2)
+```
+
+```{r}
+#clinical_combined <- rbind(clinical_df, clinical_df2)
+#dim(clinical_combined)   # should be 3069 + 340 = 3409
+```
+
+```{r}
+titles <- extract_field(lines, "!Sample_title")
+clinical_df$sample_title <- titles
+
+# Repeat the same extraction (including titles) for the second platform
+# file, producing clinical_df2, then combine:
+clinical_combined <- rbind(clinical_df, clinical_df2)
+
+# Verify the join key actually covers your expression matrix's columns
+expr_sample_cols <- colnames(expr_data)[-1]  # drop V1
+sum(expr_sample_cols %in% clinical_combined$sample_title)
+length(expr_sample_cols)
+```
+
+```{r}
+basal_titles <- clinical_combined$sample_title[clinical_combined$pam50_subtype == "Basal"]
+length(basal_titles)   # should be close to 360
+
+library(dplyr)
+#expr_basal <- expr_data %>% select(V1, all_of(basal_titles))
+
+#dim(expr_basal)
+```
+
+```{r}
+expr_basal <- dplyr::select(expr_data, V1, all_of(basal_titles))
+dim(expr_basal)
+```
+
+```{r}
+head(expr_basal,5)
+```
+
+```{r}
+write.csv(expr_basal, file = "counts_scanb_basel.csv", row.names = FALSE)
+```
+
+**compute FAO and ICR scores, same z-score-and-average method as before**
+
+```{r}
+library(dplyr)
+
+# Set gene symbols as rownames, drop the V1 column
+expr_basal_matrix <- expr_basal %>% select(-V1) %>% as.matrix()
+rownames(expr_basal_matrix) <- expr_basal$V1
+
+# Your FAO gene list (reuse the same one from MitoCarta) and ICR gene list
+fao_genes <- c("ACAA2", "ACACB", "ACAD10", "ACAD11", "ACADL", "ACADM", "ACADS",
+               "ACADSB", "ACADVL", "ACAT1", "ACOT11", "ACSF2", "ACSL1", "ACSL6",
+               "ACSM1", "ACSM2A", "ACSM2B", "ACSM3", "ACSM4", "ACSM5", "ACSS1",
+               "AMACR", "CPT1A", "CPT1B", "CPT1C", "CPT2", "CRAT", "CROT",
+               "DECR1", "ECHS1", "ECI1", "ECI2", "ETFA", "ETFB", "ETFDH",
+               "HADH", "HADHA", "HADHB", "HSD17B10", "MCEE", "MMUT", "PCCA",
+               "PCCB", "SLC25A20")
+
+icr_genes <- c("CD8A", "CD8B", "GZMA", "GZMB", "GZMK", "PRF1", "GNLY",
+               "IFNG", "TBX21", "IRF1", "STAT1", "IL15",
+               "CCL5", "CXCL9", "CXCL10", "CXCL11",
+               "HLA-A", "HLA-B", "HLA-DRA", "TAP1")
+
+compute_score <- function(expr_matrix, gene_list) {
+  genes_present <- intersect(gene_list, rownames(expr_matrix))
+  cat(length(genes_present), "of", length(gene_list), "genes found\n")
+  sub_expr <- expr_matrix[genes_present, , drop = FALSE]
+  # z-score each gene across samples, then average per sample
+  z <- t(scale(t(sub_expr)))
+  colMeans(z, na.rm = TRUE)
+}
+
+cat("FAO score:\n")
+fao_score_scanb <- compute_score(expr_basal_matrix, fao_genes)
+
+cat("ICR score:\n")
+icr_score_scanb <- compute_score(expr_basal_matrix, icr_genes)
+```
+
+```{r}
+combined_scanb <- data.frame(fao_score = fao_score_scanb, icr_score = icr_score_scanb)
+
+cor_result <- cor.test(combined_scanb$fao_score, combined_scanb$icr_score, method = "spearman")
+print(cor_result)
+
+cat("\nSCAN-B (RNA-seq) result:\n")
+cat("rho =", cor_result$estimate, ", p =", cor_result$p.value, ", n =", nrow(combined_scanb), "\n")
+cat("\nCompare to:\n")
+cat("TCGA-BRCA (RNA-seq): rho=0.28, p=6.5e-05, n=197\n")
+cat("METABRIC (microarray): rho=-0.157, p=0.023, n=209\n")
+```
+
+A correlation between Fatty Acid Oxidation and immune signature (ICR) score was identified in Basal-like tumors in TCGA-BRCA (rho=0.28, p=6.5e-05, n=197), which survived several robustness checks within that cohort (outlier removal, subtype-specificity, alternative grouping methods) and controlled for immune/stromal infiltration. However, this relationship did not replicate in two independent cohorts — METABRIC (microarray, rho=-0.16) and SCAN-B (RNA-seq, rho=0.05, n=360, the largest of the three) — with results inconsistent in both direction and significance across datasets. This inconsistency, present regardless of sequencing technology, suggests the original finding may be specific to TCGA-BRCA rather than reflecting a generalizable biological relationship in Basal-like breast cancer, underscoring the importance of independent validation before treating single-cohort transcriptomic correlations as robust findings
+
+```{r}
+# Look at the original source_name / tissue field, not just PAM50 label
+source_lines <- extract_field(lines, "!Sample_source_name_ch1")
+table(source_lines)
+```
