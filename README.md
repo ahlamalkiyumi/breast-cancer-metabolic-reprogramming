@@ -22,6 +22,7 @@ Samples: 1,109 primary tumor samples, 112 solid tissue normal samples
 Genes: protein-coding genes only, filtered from the full annotation
 No metastatic samples were included, this is a primary tumor vs.
 matched normal tissue comparison only
+Data for validation: metabric, Scan-b
 
 
 ## Method
@@ -44,6 +45,7 @@ The co-expression network resolved into distinct modules aligned with proliferat
 
 In Basal-like TCGA-BRCA tumors, a mitochondrial fatty acid oxidation (FAO) score built from MitoCarta3.0 correlated positively with the ICR immune signature (Spearman ρ=0.31, p<0.0001), and this relationship held after controlling for immune/stromal infiltration (ESTIMATE ImmuneScore), suggesting it isn't simply explained by immune cell composition. A non-circular GSEA (excluding both the ICR and FAO gene sets from the ranking) showed FAO-high Basal tumors carry a coherent interferon/antigen-presentation and oxidative metabolism signature, while FAO-low tumors trend toward hypoxia, glycolysis, angiogenesis, and EMT — with zero gene overlap confirming the pattern isn't an artifact of the scoring itself.
 
+A correlation between Fatty Acid Oxidation and immune signature (ICR) score was identified in Basal-like tumors in TCGA-BRCA (rho=0.28, p=6.5e-05, n=197), which survived several robustness checks within that cohort (outlier removal, subtype-specificity, alternative grouping methods) and controlled for immune/stromal infiltration. However, this relationship did not replicate in two independent cohorts — METABRIC (microarray, rho=-0.16) and SCAN-B (RNA-seq, rho=0.05, n=360, the largest of the three) — with results inconsistent in both direction and significance across datasets. This inconsistency, present regardless of sequencing technology, suggests the original finding may be specific to TCGA-BRCA rather than reflecting a generalizable biological relationship in Basal-like breast cancer, underscoring the importance of independent validation before treating single-cohort transcriptomic correlations as robust findings
 
 ## Tools used
 
