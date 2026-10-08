@@ -22,6 +22,7 @@ Samples: 1,109 primary tumor samples, 112 solid tissue normal samples
 Genes: protein-coding genes only, filtered from the full annotation
 No metastatic samples were included, this is a primary tumor vs.
 matched normal tissue comparison only
+
 Data for validation: metabric, Scan-b
 
 
