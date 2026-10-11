@@ -48,6 +48,8 @@ In Basal-like TCGA-BRCA tumors, a mitochondrial fatty acid oxidation (FAO) score
 
 A correlation between Fatty Acid Oxidation and immune signature (ICR) score was identified in Basal-like tumors in TCGA-BRCA (rho=0.28, p=6.5e-05, n=197), which survived several robustness checks within that cohort (outlier removal, subtype-specificity, alternative grouping methods) and controlled for immune/stromal infiltration. However, this relationship did not replicate in two independent cohorts — METABRIC (microarray, rho=-0.16) and SCAN-B (RNA-seq, rho=0.05, n=360, the largest of the three) — with results inconsistent in both direction and significance across datasets. This inconsistency, present regardless of sequencing technology, suggests the original finding may be specific to TCGA-BRCA rather than reflecting a generalizable biological relationship in Basal-like breast cancer, underscoring the importance of independent validation before treating single-cohort transcriptomic correlations as robust findings
 
+Fatty Acid Oxidation score correlates specifically with Macrophage M2 infiltration (rho=0.24, padj=0.0066) and CD8+ T cell infiltration (rho=0.19, padj=0.048) in Basal-like breast tumors, while showing no relationship with 8 other immune cell types. This cell-type specificity — consistent with established links between FAO metabolism and M2 macrophage polarization — likely explains why blended immune signatures (like ICR) produced inconsistent correlations with FAO across independent cohorts: a real, cell-type-specific signal gets diluted when averaged across immunologically heterogeneous cell populations.
+
 ## Tools used
 
 - Python: pandas, PyDESeq2, gseapy, matplotlib/seaborn, kruskal-wallis, dunn's test, pingouin, scipy
