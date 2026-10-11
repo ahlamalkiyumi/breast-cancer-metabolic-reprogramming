@@ -1,0 +1,331 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+```{r}
+if (!require("immunedeconv")) {
+  if (!require("remotes")) install.packages("remotes")
+  remotes::install_github("icbi-lab/immunedeconv")
+}
+```
+
+```{r}
+library(immunedeconv)
+library(dplyr)
+```
+
+### TCGA-BRCA
+
+### convert raw counts to TPM
+
+```{r}
+if (!require("biomaRt")) 
+  BiocManager::install("biomaRt")
+```
+
+```{r}
+library(biomaRt)
+```
+
+```{r}
+library(biomaRt)
+library(dplyr)
+
+mart <- useMart(
+  "ensembl",
+  dataset = "hsapiens_gene_ensembl",
+  host = "https://useast.ensembl.org"
+)
+
+gene_lengths <- getBM(
+  attributes = c("hgnc_symbol", "start_position", "end_position"),
+  mart = mart
+)
+
+gene_lengths$length_kb <- (
+  gene_lengths$end_position - gene_lengths$start_position
+) / 1000
+
+gene_lengths <- gene_lengths %>%
+  filter(hgnc_symbol != "") %>%
+  distinct(hgnc_symbol, .keep_all = TRUE)
+```
+
+```{r}
+counts_matrix <- read.csv("counts_with_genes_symbol.csv")
+basal <- read.csv("counts_basal.csv")
+```
+
+```{r}
+head(counts_matrix,5)
+```
+
+```{r}
+cat("Rows:", nrow(basel), "\n")
+cat("Columns:", ncol(basel), "\n")
+
+cat("Gene names:", length(unlist(basel[1, -1])), "\n")
+cat("Sample names:", length(unlist(basel[-1, 1])), "\n")
+```
+
+```{r}
+# 1. Gene names = column names of original, excluding sample barcode
+gene_names <- colnames(basel)[-1]
+
+# 2. Sample names = first column of original
+sample_names <- basel[[1]]
+
+# 3. Expression data = everything except first column
+counts <- basel[, -1]
+
+# 4. Convert expression values to numeric
+counts <- as.matrix(
+  data.frame(
+    lapply(counts, function(x) as.numeric(as.character(x))),
+    check.names = FALSE
+  )
+)
+
+# 5. Transpose: genes × samples
+tcga_counts_basal <- t(counts)
+
+# 6. Assign names
+rownames(tcga_counts_basal) <- gene_names
+colnames(tcga_counts_basal) <- sample_names
+
+# Check
+dim(tcga_counts_basal)
+head(rownames(tcga_counts_basal))
+head(colnames(tcga_counts_basal))
+```
+
+```{r}
+rownames(tcga_counts_basal) <- gene_names
+colnames(tcga_counts_basal) <- sample_names
+
+counts_to_tpm <- function(counts_matrix, gene_lengths_df) {
+  common_genes <- intersect(rownames(counts_matrix), gene_lengths_df$hgnc_symbol)
+  counts_sub <- counts_matrix[common_genes, ]
+  lengths_sub <- gene_lengths_df$length_kb[match(common_genes, gene_lengths_df$hgnc_symbol)]
+  
+  rpk <- counts_sub / lengths_sub          # reads per kilobase
+  scaling_factors <- colSums(rpk) / 1e6    # per-million scaling factor
+  tpm <- sweep(rpk, 2, scaling_factors, "/")
+  return(tpm)
+}
+
+# tcga_counts_basal should be your raw-count matrix, genes x samples,
+# restricted to Basal-like samples, gene symbols as rownames
+tcga_tpm_basal <- counts_to_tpm(tcga_counts_basal, gene_lengths)
+```
+
+```{r}
+dim(tcga_tpm_basal)
+
+head(rownames(tcga_tpm_basal))
+
+colSums(tcga_tpm_basal)[1:5]
+
+summary(as.vector(tcga_tpm_basal))
+```
+
+Run quanTIseq on TCGA-BRCA
+
+```{r}
+tcga_quantiseq <- deconvolute(tcga_tpm_basal, method = "quantiseq")
+print(tcga_quantiseq)
+```
+
+### SCAN-B
+
+```{r}
+scanb_expr_basal<- read.csv("counts_scanb_basel.csv")
+```
+
+```{r}
+head(scanb_expr_basal,5)
+```
+
+```{r}
+class(scanb_expr_basal)
+dim(scanb_expr_basal)
+
+head(rownames(scanb_expr_basal), 20)
+head(colnames(scanb_expr_basal), 10)
+
+str(scanb_expr_basal[, 1:3])
+```
+
+```{r}
+# Save gene identifiers
+gene_names <- scanb_expr_basal$V1
+
+# Remove the gene-name column
+scanb_expr_basal <- scanb_expr_basal[, -1]
+
+# Put gene names into rownames
+rownames(scanb_expr_basal) <- gene_names
+```
+
+```{r}
+scanb_linear_basal <- 2^scanb_expr_basal - 1  # reverse log2(x+1)-style transform
+# (adjust the "-1" if your original transform used a different pseudocount)
+
+scanb_quantiseq <- deconvolute(scanb_linear_basal, method = "quantiseq")
+print(scanb_quantiseq)
+```
+
+### METABRIC
+
+```{r}
+metabric_expr_basal<- read.csv("metabric_data.csv")
+```
+
+```{r}
+# Preserve gene names
+gene_names <- rownames(scanb_expr_basal)
+
+# Convert ONLY expression values to numeric matrix
+expr_mat <- as.matrix(scanb_expr_basal)
+
+storage.mode(expr_mat) <- "numeric"
+
+rownames(expr_mat) <- gene_names
+```
+
+```{r}
+expr_mat <- as.matrix(scanb_expr_basal)
+storage.mode(expr_mat) <- "numeric"
+
+quantiseq_result <- deconvolute(
+  scanb_expr_basal,
+  method = "quantiseq"
+)
+
+#metabric_quantiseq <- deconvolute(metabric_expr_basal, method = "quantiseq")
+print(metabric_quantiseq)
+```
+
+```{r}
+print(quantiseq_result)
+```
+
+```{r}
+tcga_quantiseq$cohort <- "TCGA"
+quantiseq_result$cohort <- "METABRIC"
+scanb_quantiseq$cohort <- "SCAN-B"
+
+all_quantiseq <- bind_rows(tcga_quantiseq, quantiseq_result, scanb_quantiseq)
+
+library(tidyr)
+long_format <- all_quantiseq %>%
+  pivot_longer(cols = -c(cell_type, cohort), names_to = "sample", values_to = "fraction")
+```
+
+```{r}
+# Boxplot comparing each immune cell type's proportion across cohorts
+library(ggplot2)
+ggplot(long_format, aes(x = cell_type, y = fraction, fill = cohort)) +
+  geom_boxplot(outlier.size = 0.5) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Immune cell type composition: Basal-like tumors across cohorts",
+       y = "Estimated fraction", x = "Cell type")
+ggsave("immune_composition_comparison.png", width = 12, height = 7, dpi = 150)
+```
+
+```{r}
+# Statistical test: does each cell type's proportion differ significantly
+# across the three cohorts?
+cell_types <- unique(long_format$cell_type)
+kw_results <- lapply(cell_types, function(ct) {
+  sub <- long_format %>% filter(cell_type == ct)
+  test <- kruskal.test(fraction ~ cohort, data = sub)
+  data.frame(cell_type = ct, kw_stat = test$statistic, pvalue = test$p.value)
+})
+kw_results_df <- bind_rows(kw_results)
+kw_results_df$padj <- p.adjust(kw_results_df$pvalue, method = "BH")
+print(kw_results_df[order(kw_results_df$padj), ])
+
+write.csv(kw_results_df, "immune_composition_cohort_differences.csv", row.names = FALSE)
+```
+
+### Specific immune cell in TCGA
+
+```{r}
+fao_score <- read.csv("fao_score.csv")
+```
+
+```{r}
+fao_score <- setNames(
+  fao_score$Fatty.acid.oxidation,
+  fao_score$X
+)
+```
+
+```{r}
+common_samples <- intersect(
+  colnames(tcga_quantiseq)[-1],
+  names(fao_score)
+)
+
+length(common_samples)
+```
+
+```{r}
+ct <- tcga_quantiseq$cell_type[1]
+
+ct_data <- tcga_quantiseq %>%
+  filter(cell_type == ct) %>%
+  dplyr::select(-cell_type)
+
+ct_values <- as.numeric(ct_data[1, ])
+names(ct_values) <- colnames(ct_data)
+
+ct_values <- ct_values[common_samples]
+fao_values <- fao_score[common_samples]
+
+cor.test(ct_values, fao_values, method = "spearman")
+```
+
+```{r}
+results <- lapply(cell_types, function(ct) {
+  
+  ct_data <- tcga_quantiseq %>%
+    filter(cell_type == ct) %>%
+    dplyr::select(-cell_type)
+  
+  ct_values <- as.numeric(ct_data[1, ])
+  names(ct_values) <- colnames(ct_data)
+  
+  ct_values <- ct_values[common_samples]
+  fao_values <- fao_score[common_samples]
+  
+  test <- cor.test(
+    ct_values,
+    fao_values,
+    method = "spearman"
+  )
+  
+  data.frame(
+    cell_type = ct,
+    rho = unname(test$estimate),
+    pvalue = test$p.value
+  )
+})
+
+results_df <- bind_rows(results)
+
+results_df$padj <- p.adjust(
+  results_df$pvalue,
+  method = "BH"
+)
+
+results_df <- results_df[order(results_df$padj), ]
+
+print(results_df)
+```
+
+Fatty Acid Oxidation score correlates specifically with Macrophage M2 infiltration (rho=0.24, padj=0.0066) and CD8+ T cell infiltration (rho=0.19, padj=0.048) in Basal-like breast tumors, while showing no relationship with 8 other immune cell types. This cell-type specificity — consistent with established links between FAO metabolism and M2 macrophage polarization — likely explains why blended immune signatures (like ICR) produced inconsistent correlations with FAO across independent cohorts: a real, cell-type-specific signal gets diluted when averaged across immunologically heterogeneous cell populations.
