@@ -1,0 +1,109 @@
+---
+title: "Untitled"
+format: html
+---
+
+### Primary Question:Is the FAO transcriptional program in breast cancer predominantly associated with malignant cells, and does it differ across breast-cancer subtypes?
+
+### Q1:Which cell populations have the strongest FAO scores: malignant cells, macrophages, other myeloid cells, or T cells?
+
+```{python}
+import scanpy as sc
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.stats import kruskal
+```
+
+```{python}
+adata = sc.read_h5ad("wu2021_brca.h5ad")   # log-normalized
+```
+
+```{python}
+# Patients per subtype
+pt_sub = adata.obs.groupby("orig.ident")["subtype"].first()
+print(pt_sub.value_counts())
+```
+
+```{python}
+# FAO score per cell
+fao_genes = pd.read_csv("fao_genes.csv")["gene"].tolist()
+fao_genes = [g for g in fao_genes if g in adata.var_names]
+print("FAO genes found:", len(fao_genes))
+sc.tl.score_genes(adata, fao_genes, score_name="FAO_score")
+```
+
+```{python}
+# --- SQ1: FAO by cell type, per patient mean (all 26) ---
+min_cells = 20
+g = adata.obs.groupby(["orig.ident", "celltype_major"])["FAO_score"]
+pt_ct = pd.concat([g.mean().rename("FAO"), g.size().rename("n")], axis=1).reset_index()
+pt_ct = pt_ct[pt_ct["n"] >= min_cells]            # drop tiny groups
+pt_ct["subtype"] = pt_ct["orig.ident"].map(pt_sub)
+
+print(pt_ct.groupby("celltype_major")["FAO"].agg(["median", "count"]).round(3)
+      .sort_values("median", ascending=False))
+```
+
+epithelial cells carry the FAO program, and malignant cells keep a modest share of it.
+
+epithelial cells (normal and malignant) \> myeloid, CAFs and others \> T cells and B cells. Macrophages and myeloid cells are not the source.
+
+```{python}
+# --- Subtype question: malignant cells only ---
+mal = pt_ct[pt_ct["celltype_major"] == "Cancer Epithelial"]
+print(mal.groupby("subtype")["FAO"].agg(["median", "count"]).round(3))
+
+groups = [d["FAO"].values for _, d in mal.groupby("subtype")]
+if all(len(x) >= 2 for x in groups):
+    print("Kruskal-Wallis p =", round(kruskal(*groups).pvalue, 3))
+```
+
+No FAO difference between subtypes in malignant cells.
+
+```{python}
+# Plots
+fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+pt_ct.boxplot(column="FAO", by="celltype_major", ax=ax[0], rot=90)
+mal.boxplot(column="FAO", by="subtype", ax=ax[1])
+plt.tight_layout(); plt.savefig("fao_celltype_subtype.png", dpi=200)
+plt.show()
+#pt_ct.to_csv("fao_per_patient_celltype.csv", index=False)
+```
+
+### Q2:**Is malignant FAO associated with macrophage or CD8 abundance?**
+
+```{python}
+# Malignant-cell FAO per patient (>= 20 cancer cells)
+cancer = adata.obs[adata.obs["celltype_major"] == "Cancer Epithelial"]
+n = cancer.groupby("orig.ident").size()
+fao_mal = cancer.groupby("orig.ident")["FAO_score"].mean()[n >= 20]
+```
+
+```{python}
+from scipy.stats import spearmanr
+
+# Immune abundance as a fraction of NON-epithelial cells,
+# so tumor purity doesn't drive the number
+nonepi = adata.obs[~adata.obs["celltype_major"].isin(
+    ["Cancer Epithelial", "Normal Epithelial"])]
+props = (nonepi.groupby(["orig.ident", "celltype_minor"]).size()
+         .unstack(fill_value=0))
+props = props.div(props.sum(axis=1), axis=0)
+
+df = pd.DataFrame({"FAO_malignant": fao_mal,
+                   "Macrophage": props["Macrophage"],
+                   "CD8": props["T cells CD8+"]}).dropna()
+df["subtype"] = adata.obs.groupby("orig.ident")["subtype"].first()
+print(df.round(3))
+
+def corr(d, label):
+    for col in ["Macrophage", "CD8"]:
+        rho, p = spearmanr(d["FAO_malignant"], d[col])
+        print(f"{label}: FAO vs {col}: rho={rho:.2f}, p={p:.3f}, n={len(d)}")
+
+corr(df, "All")
+corr(df[df["subtype"] == "TNBC"], "TNBC only")
+df.to_csv("fao_vs_immune_per_patient.csv")
+```
+
+The association is not detectable in this dataset, because the sample is too small to tell.

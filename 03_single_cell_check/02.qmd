@@ -1,0 +1,116 @@
+---
+title: "02"
+format: html
+editor: visual
+jupyter: python3
+---
+
+```{python}
+import scanpy as sc
+import pandas as pd
+```
+
+```{python}
+adata = sc.read_h5ad("wu2021_brca.h5ad")   # log-normalized
+
+basal = ["CID4515", "CID44971", "CID4465", "CID4495"]
+solid = ["CID4515", "CID44971"]
+sub = adata[adata.obs["orig.ident"].isin(basal)].copy()
+```
+
+```{python}
+fao_genes = [
+    "ACAA2", "ACACB", "ACAD10", "ACAD11", "ACADL", "ACADM", "ACADS",
+    "ACADSB", "ACADVL", "ACAT1", "ACOT11", "ACSF2", "ACSL1", "ACSL6",
+    "ACSM1", "ACSM2A", "ACSM2B", "ACSM3", "ACSM4", "ACSM5", "ACSS1",
+    "AMACR", "CPT1A", "CPT1B", "CPT1C", "CPT2", "CRAT", "CROT",
+    "DECR1", "ECHS1", "ECI1", "ECI2", "ETFA", "ETFB", "ETFDH",
+    "HADH", "HADHA", "HADHB", "HSD17B10", "MCEE", "MMUT", "PCCA",
+    "PCCB", "SLC25A20"
+]
+```
+
+```{python}
+df = pd.DataFrame({"gene": fao_genes})
+df.to_csv("fao_genes.csv", index=False)
+```
+
+```{python}
+#FAO gene set from the TCGA analysis (MitoPathways FAO)
+fao_genes = pd.read_csv("fao_genes.csv")["gene"].tolist() 
+fao_genes = [g for g in fao_genes if g in sub.var_names]
+print("FAO genes found:", len(fao_genes))
+```
+
+```{python}
+sc.tl.score_genes(sub, fao_genes, score_name="FAO_score")
+```
+
+```{python}
+# Which myeloid / T cell labels exist? (needed to pick the M2 / CD8 groups)
+print(sub.obs["celltype_major"].value_counts())
+print(sub.obs["celltype_minor"].value_counts())
+```
+
+```{python}
+# Mean FAO per cell type, per patient, with cell counts
+g = sub.obs.groupby(["celltype_major", "orig.ident"])["FAO_score"]
+tab = pd.concat([g.mean().round(3).rename("mean_FAO"),
+                 g.size().rename("n_cells")], axis=1).reset_index()
+print(tab.pivot(index="celltype_major", columns="orig.ident",
+                values=["mean_FAO", "n_cells"]))
+```
+
+```{python}
+pd.set_option("display.width", 250)
+pd.set_option("display.max_columns", None)
+
+print("FAO genes found:", len(fao_genes))
+
+mean_tab = tab.pivot(index="celltype_major", columns="orig.ident", values="mean_FAO")
+n_tab = tab.pivot(index="celltype_major", columns="orig.ident", values="n_cells")
+print(mean_tab.round(3))
+print(n_tab)
+
+# The labels we need to pick macrophage and CD8 groups
+mm = sub[sub.obs["celltype_major"].isin(["Myeloid", "T-cells"])]
+print(mm.obs["celltype_minor"].value_counts())
+```
+
+```{python}
+# Overall picture
+sc.pl.violin(sub, "FAO_score", groupby="celltype_major", rotation=90)
+```
+
+```{python}
+# genes missing from the dataset
+all_fao = pd.read_csv("fao_genes.csv")["gene"].tolist()
+print("Missing:", [g for g in all_fao if g not in sub.var_names])
+
+# FAO by minor cell type, in the 4 Basal patients
+keep = ["Macrophage", "Monocyte", "DCs", "T cells CD8+", "T cells CD4+"]
+m = sub[sub.obs["celltype_minor"].isin(keep)]
+g = m.obs.groupby(["celltype_minor", "orig.ident"])["FAO_score"]
+tab = pd.concat([g.mean().round(3).rename("mean_FAO"),
+                 g.size().rename("n_cells")], axis=1).reset_index()
+print(tab.pivot(index="celltype_minor", columns="orig.ident",
+                values=["mean_FAO", "n_cells"]))
+```
+
+In bulk TCGA, tumors with high FAO (fatty acid oxidation) also have more M2 macrophages and CD8 T cells. The open question was whether that’s because the immune cells themselves carry FAO genes, or because the tumor cells are doing the FAO.
+
+Using single-cell data from 4 Basal-like patients, the answer is mostly the tumor cells:
+
+- Cancer cells had the highest FAO score in every patient.
+
+- Macrophages were slightly above other myeloid cells, but far below the cancer cells.
+
+- T cells were at or below background.
+
+Limitation:
+
+- Only 4 patients, two of them low confidence
+
+- It shows where the signal comes from, but it can’t test the correlation with M2 or CD8 itself
+
+- There is no M2 label in this dataset

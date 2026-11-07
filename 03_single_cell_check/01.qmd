@@ -1,0 +1,177 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+library(reticulate)
+
+use_condaenv("scanpy-env", required = TRUE)
+
+py_config()
+```
+
+```{python}
+import scanpy as sc
+import pandas as pd
+import scipy.io
+from scipy import sparse
+import anndata as ad
+```
+
+```{python}
+d = "Wu_etal_2021_BRCA_scRNASeq/"   #folder namw
+
+X = scipy.io.mmread(d + "count_matrix_sparse.mtx").tocsr()
+genes = pd.read_csv(d + "count_matrix_genes.tsv", header=None)[0].values #selects the first column which is the genes 
+cells = pd.read_csv(d + "count_matrix_barcodes.tsv", header=None)[0].values
+meta = pd.read_csv(d + "metadata.csv", index_col=0)
+```
+
+```{python}
+#to cehck if X is genes x cells
+print(X.shape, len(genes), len(cells))
+```
+
+```{python}
+#transpose X (AnnData wants cells x genes)
+if X.shape[0] == len(genes):
+    X = X.T.tocsr()
+    
+#AnnData is as a structured container for your single-cell experiment. 
+#Instead of managing separate matrices and metadata files throughout the analysis, we have one object connecting them.
+adata = ad.AnnData(X=X)
+adata.obs_names = cells
+adata.var_names = genes
+adata.obs = adata.obs.join(meta)
+adata.layers["counts"] = adata.X.copy()   # keep raw counts for pseudobulk
+```
+
+```{python}
+#normalization adjusts for differences in total counts per cell. It does not eliminate every technical bias or prove that expression differences are biological.
+#The values are now comparable on a common scale.
+sc.pp.normalize_total(adata, target_sum=1e4)
+
+#After normalization, some genes can have very large values while many others have small values. This creates a highly skewed distribution.
+#log1p() calculates:ln(1+x)
+sc.pp.log1p(adata)
+
+print(adata.obs.columns.tolist())
+#adata.write_h5ad("wu2021_brca.h5ad")
+```
+
+```{python}
+import numpy as np
+
+adata = sc.read_h5ad("wu2021_brca.h5ad")
+
+# 1. Look before filtering: exact labels and patient numbers
+print(adata.obs["subtype"].value_counts())
+print(adata.obs["celltype_major"].value_counts())
+print(adata.obs.groupby("subtype")["orig.ident"].nunique())
+```
+
+```{python}
+# 2. TNBC cancer epithelial cells 
+mask = (adata.obs["subtype"] == "TNBC") & \
+       (adata.obs["celltype_major"] == "Cancer Epithelial")
+tnbc = adata[mask]
+
+print(tnbc.obs["orig.ident"].value_counts())   # cancer cells per patient
+```
+
+```{python}
+# 3. Sum raw counts per patient
+X = tnbc.layers["counts"]
+#Convert the sparse matrix to a regular array
+X = X.toarray() if hasattr(X, "toarray") else X
+#Attach gene names and cell identifiers
+counts = pd.DataFrame(X, index=tnbc.obs_names, columns=tnbc.var_names)
+#tnbc.obs["orig.ident"] provides the patient or sample identifier associated with each cell. groupby() groups cells with the same identifier, and .sum() adds their raw counts gene by gene.
+pseudo = counts.groupby(tnbc.obs["orig.ident"].values).sum()
+```
+
+```{python}
+n_cells = tnbc.obs["orig.ident"].value_counts().sort_index()
+print(n_cells)
+
+# Flag low-count patients
+cutoff = 100
+low = n_cells[n_cells < cutoff]
+print(f"\nPatients under {cutoff} cancer cells:\n{low}")
+
+# Quick look at the distribution
+print(n_cells.describe())
+```
+
+```{python}
+# 4. Log CPM
+cpm = pseudo.div(pseudo.sum(axis=1), axis=0) * 1e6
+logcpm = np.log2(cpm + 1)
+logcpm.to_csv("tnbc_pseudobulk_logcpm.csv")
+
+# 5. Marker sanity check
+markers = ["KRT5","KRT14","KRT17","EGFR","ESR1","GATA3","FOXA1"]
+print(logcpm[[m for m in markers if m in logcpm.columns]].round(2))
+```
+
+A clear Basal-like tumor should show high KRT5/14/17 (and often EGFR) with low ESR1/GATA3/FOXA1. If a patient shows the opposite pattern, they are probably not Basal-like.
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install("genefu")a
+```
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install("org.Hs.eg.db")
+```
+
+```{r}
+library(genefu)
+library(org.Hs.eg.db)
+
+# 1. Load the pseudobulk (patients x genes)
+x <- read.csv("tnbc_pseudobulk_logcpm.csv", row.names = 1, check.names = FALSE)
+
+# 2. Map gene symbols to Entrez IDs (genefu's PAM50 uses Entrez)
+entrez <- mapIds(org.Hs.eg.db, keys = colnames(x),
+                 column = "ENTREZID", keytype = "SYMBOL", multiVals = "first")
+
+#Keep genes that have valid mappings
+keep <- !is.na(entrez)
+x <- x[, keep]
+
+#Create the gene annotation table
+annot <- data.frame(probe = colnames(x),
+                    Gene.Symbol = colnames(x),
+                    EntrezGene.ID = as.numeric(entrez[keep]),
+                    row.names = colnames(x))
+
+```
+
+The goal is to see whether the data contain enough of the 50 PAM50 genes to potentially classify samples into breast cancer molecular subtypes.
+
+```{r}
+# 3. How many of the 50 PAM50 genes are present?
+data(pam50.robust)
+#pam_ids contains the Entrez IDs associated with the PAM50 reference genes.
+pam_ids <- pam50.robust$centroids.map$EntrezGene.ID
+cat("PAM50 genes found:", sum(pam_ids %in% annot$EntrezGene.ID), "of", length(pam_ids), "\n")
+```
+
+```{r}
+# 4. Call subtypes
+pred <- intrinsic.cluster.predict(
+  sbt.model = pam50.robust, data = x, annot = annot,
+  do.mapping = TRUE, mapping = annot, verbose = TRUE
+)
+print(table(pred$subtype))
+print(data.frame(patient = rownames(x), subtype = pred$subtype))
+```
