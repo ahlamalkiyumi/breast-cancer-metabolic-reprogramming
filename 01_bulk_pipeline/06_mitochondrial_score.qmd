@@ -48,8 +48,8 @@ data_filtered = data_filtered.set_index("gene_symbol")
 ```
 
 ```{python}
-#Log-transform (variance stabilization)
-log_expr = np.log2(data_filtered +1)
+cpm = data_filtered.div(data_filtered.sum(axis=0), axis=1) * 1e6
+log_expr = np.log2(cpm + 1)       
 ```
 
 ```{python}
@@ -106,7 +106,7 @@ stat, pval = mannwhitneyu(tumor_scores.dropna(), normal_scores.dropna())
 print(f"Mann-Whitney U test p-value: {pval:.2e}")
 ```
 
-tumor samples show a slightly higher average mitochondrial score (0.010) than normal samples (-0.099), not lower. Tumors often show increased mitochondrial biogenesis and altered mitochondrial dynamics even while specific energy-production pathways (OXPHOS, fatty acid oxidation) go down. So "more mitochondrial genes overall" and "less oxidative energy production specifically" aren't actually contradictory, they can both be true if the mitochondrial changes are about remodeling, not just shutting down.
+tumor samples show a slightly higher average mitochondrial score (0.013) than normal samples (-0.124), not lower. Tumors often show increased mitochondrial biogenesis and altered mitochondrial dynamics even while specific energy-production pathways (OXPHOS, fatty acid oxidation) go down. So "more mitochondrial genes overall" and "less oxidative energy production specifically" aren't actually contradictory, they can both be true if the mitochondrial changes are about remodeling, not just shutting down.
 
 ## MitoCarta3.0 Pathway-level sub-scores
 
