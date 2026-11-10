@@ -1,0 +1,105 @@
+---
+title: "Up and down Pathways in cancer"
+format: html
+---
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/Users/air/bioenv311/bin/python")
+
+library(reticulate)
+
+py_config()
+```
+
+```{python}
+import pandas as pd
+import gseapy as gp
+```
+
+```{python}
+up_genes = pd.read_csv("upregulated_genes_paired.csv", index_col=0)
+down_genes = pd.read_csv("downregulated_genes_paired.csv", index_col=0)
+up_gene_list = up_genes["gene_symbol"].tolist()
+down_gene_list = down_genes["gene_symbol"].tolist()
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv")
+```
+
+```{python}
+gene_sets = ["MSigDB_Hallmark_2020", "KEGG_2021_Human"]
+
+enr_up = gp.enrichr(
+    gene_list=up_gene_list,
+    gene_sets=gene_sets,
+    organism="human",
+    outdir=None,   
+)
+ 
+enr_down = gp.enrichr(
+    gene_list=down_gene_list,
+    gene_sets=gene_sets,
+    organism="human",
+    outdir=None,
+)
+
+
+up_results = enr_up.results.sort_values("Adjusted P-value")
+down_results = enr_down.results.sort_values("Adjusted P-value")
+```
+
+```{python}
+print(f"Top pathways UP in cancer")
+print(up_results[up_results["Adjusted P-value"] < 0.05][["Term","Overlap","Adjusted P-value","Genes"]].to_string())
+
+```
+
+```{python}
+print(f"Top pathways DOWN in cancer")
+print(down_results[down_results["Adjusted P-value"] < 0.05][["Term","Overlap","Adjusted P-value","Genes"]].to_string())
+```
+
+## Prepare data for gsea
+
+```{python}
+results_df = pd.read_csv("deseq2_paired_cancer_vs_normal.csv")
+```
+
+```{python}
+results_df = results_df.set_index("gene_id")
+genes_metadata = genes_metadata.set_index("Unnamed: 0")
+```
+
+```{python}
+print("results_df index sample:", results_df.index[:3].tolist())
+print("gene_metadata index sample:", genes_metadata.index[:3].tolist())
+```
+
+```{python}
+results_df["gene_symbol"] = results_df.index.map(genes_metadata["gene_name"])
+```
+
+```{python}
+# Drop genes with no symbol, no stat, or duplicate symbols
+ranked = results_df.dropna(subset=["gene_symbol", "stat"]).copy()
+```
+
+```{python}
+# If multiple Ensembl IDs map to the same symbol, keep the one with the
+# most extreme stat (GSEA needs one value per gene symbol, not duplicates)
+ranked["abs_stat"] = ranked["stat"].abs()
+ranked = ranked.sort_values("abs_stat", ascending=False)
+ranked = ranked.drop_duplicates(subset="gene_symbol", keep="first")
+ 
+print(f"\nGenes going into ranked list: {len(ranked)}")
+```
+
+```{python}
+# Export just gene_symbol + stat, sorted by stat descending
+# (R's clusterProfiler expects this order: most positive to most negative)
+ranked_export = ranked[["gene_symbol", "stat"]].sort_values("stat", ascending=False)
+ranked_export.to_csv("paired_ranked_gene_list_for_gsea.csv", index=False)
+ 
+print("\nSaved: ranked_gene_list_for_gsea.csv")
+print(ranked_export.head())
+print("...")
+print(ranked_export.tail())
+```

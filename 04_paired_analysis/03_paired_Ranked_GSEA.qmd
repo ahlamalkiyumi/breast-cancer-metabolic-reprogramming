@@ -1,0 +1,64 @@
+---
+title: "Ranked GSEA"
+format: html
+---
+
+```{r}
+library(clusterProfiler)
+library(msigdbr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+#load data from python
+ranked <- read.csv("paired_ranked_gene_list_for_gsea.csv")
+```
+
+```{r}
+# clusterProfiler wants a NAMED, SORTED numeric vector: names = gene symbols,
+# values = ranking statistic (DESeq2's Wald stat)
+gene_list <- ranked$stat
+names(gene_list) <- ranked$gene_symbol
+gene_list <- sort(gene_list, decreasing = TRUE) #must be sorted descending
+
+head(gene_list)
+tail(gene_list)
+```
+
+```{r}
+hallmark_sets <- msigdbr(species = "Homo sapiens",category = "H") %>% dplyr::select(gs_name, gene_symbol)
+```
+
+```{r}
+#run GSEA
+gsea_res <- GSEA(
+  geneList = gene_list,
+  TERM2GENE = hallmark_sets,
+  pvalueCutoff = 1,
+  minGSSize = 10,
+  maxGSSize = 500,
+  seed = TRUE
+)
+```
+
+```{r}
+gsea_df <- as.data.frame(gsea_res) %>% arrange(p.adjust)
+```
+
+```{r}
+colnames(gsea_df)
+```
+
+```{r}
+up   <- subset(gsea_df, p.adjust < 0.05 & NES > 0)
+down <- subset(gsea_df, p.adjust < 0.05 & NES < 0)
+```
+
+```{r}
+print(up[order(-up$NES), c("Description", "NES", "p.adjust", "core_enrichment")])
+```
+
+```{r}
+print(down[order(down$NES), c("Description", "NES", "p.adjust", "core_enrichment")])
+```
