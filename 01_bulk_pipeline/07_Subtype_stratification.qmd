@@ -219,9 +219,9 @@ print("\nPairwise subtype comparisons (Dunn's test, FDR-adjusted p-values):")
 print(dunn_result)
 ```
 
-- **LumB is different from every other group** (all FDR \< 0.001)
+- **LumB is different from every other group** 
 
-- **Normal-like is different from every subtype** (all FDR \< 0.05)
+- **Normal-like is different from every subtype** 
 
 - **Basal and HER2 are not distinguishable from each other**
 
