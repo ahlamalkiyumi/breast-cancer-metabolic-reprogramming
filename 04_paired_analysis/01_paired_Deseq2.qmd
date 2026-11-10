@@ -1,0 +1,134 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{python}
+import pandas as pd 
+from pydeseq2.dds import DeseqDataSet
+from pydeseq2.ds import DeseqStats
+```
+
+```{python}
+data_filtered = pd.read_csv("data_filtered.csv", index_col=0)
+sample = pd.read_csv("sample.csv", index_col=0)
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv")
+genes_metadata = genes_metadata.set_index("gene_id")
+```
+
+```{python}
+#change the column name to condition
+condition_data = sample[["tcga.cgc_sample_sample_type"]].copy()
+condition_data  = condition_data .rename(columns={"tcga.cgc_sample_sample_type": "condition"})
+
+# Map the long TCGA labels to short, consistent values
+condition_data ["condition"] = condition_data ["condition"].map({
+    "Primary Tumor": "cancer",
+    "Solid Tissue Normal": "normal"
+})
+
+# Confirm mapping worked and nothing became NaN
+print(condition_data ["condition"].value_counts(dropna=False))
+
+# Set "normal" as the reference level, so fold changes read as tumor-vs-normal
+condition_data ["condition"] = condition_data ["condition"].astype("category")
+condition_data ["condition"] = condition_data ["condition"].cat.reorder_categories(["normal", "cancer"])
+```
+
+```{python}
+# 1. Add patient to the metadata (same row order/index as condition_data)
+condition_data["patient"] = sample["tcga.gdc_cases.submitter_id"].astype(str)
+
+
+# 2. Keep only patients that have BOTH cancer and normal
+n_cond = condition_data.groupby("patient")["condition"].nunique()
+paired = n_cond[n_cond == 2].index
+sub = condition_data[condition_data["patient"].isin(paired)].copy()
+```
+
+```{python}
+# 3. One sample per patient per condition: keep the largest library size
+lib = data_filtered.sum(axis=0)                    # total counts per sample (columns = barcodes)
+sub["lib_size"] = lib.reindex(sub.index)
+
+keep_idx = (sub.sort_values("lib_size", ascending=False)
+               .groupby(["patient", "condition"], observed=True)
+               .head(1)
+               .index)
+
+removed = sub.index.difference(keep_idx)
+print("Removed samples:", list(removed))           #
+
+sub = sub.loc[sub.index.isin(keep_idx)].drop(columns="lib_size")
+
+print("Paired patients:", sub["patient"].nunique())   # 112
+print(sub["condition"].value_counts())                # 112 and 112
+
+# 4. Keep the same category order (normal = reference) and make patient a category
+sub["condition"] = sub["condition"].astype("category").cat.reorder_categories(["normal", "cancer"])
+sub["patient"] = sub["patient"].astype("category")
+```
+
+```{python}
+# 5. Subset counts to the same samples (rows = samples)
+counts_for_dds = data_filtered.T.loc[sub.index]
+# optional: drop genes that are now all-zero or very low in this subset
+counts_for_dds = counts_for_dds.loc[:, counts_for_dds.sum(axis=0) >= 10]
+```
+
+```{python}
+# 6. Paired model: patient first, condition last
+dds = DeseqDataSet(
+    counts=counts_for_dds,
+    metadata=sub[["patient", "condition"]],
+    design_factors=["patient", "condition"],
+    refit_cooks=True,
+)
+dds.deseq2()
+```
+
+```{python}
+stat = DeseqStats(dds, contrast=["condition", "cancer", "normal"])
+stat.summary()
+res_paired = stat.results_df
+res_paired.to_csv("deseq2_paired_cancer_vs_normal.csv")
+```
+
+```{python}
+#add new column for gene symol and map it with genes metadata
+res_paired["gene_symbol"] = res_paired.index.map(genes_metadata["gene_name"])
+res_paired.head()
+#results_df.to_csv("deseq2_results_tcga_brca.csv")
+sig_genes_paired = res_paired[
+(res_paired["padj"]< 0.05) &
+(res_paired["log2FoldChange"].abs() > 1)]
+
+print(f"Total genes tested: {len(res_paired)}")
+print(f"Significant genes (padj<0.05, |log2FC|>1): {len(sig_genes_paried)}")
+#results_df.to_csv("deseq2_results_tcga_brca.csv")
+sig_genes_paired.head()
+```
+
+```{python}
+# Split into up- and down-regulated 
+up_in_cancer = sig_genes_paired[sig_genes_paired["log2FoldChange"] > 1]
+down_in_cancer = sig_genes_paired[sig_genes_paired["log2FoldChange"] < -1]
+
+print(f" Up in Cancer: {len(up_in_cancer)}")
+print(f" Down in Cancer: {len(down_in_cancer)}")
+```
+
+```{python}
+# Look at them, sorted by strength of change not just significance
+print("Top 10 upregulated in cancer (by fold change):")
+print(up_in_cancer.sort_values("log2FoldChange", ascending=False).head(10))
+ 
+print("\nTop 10 downregulated in cancer (by fold change):")
+print(down_in_cancer.sort_values("log2FoldChange").head(10))
+```
+
+```{python}
+sig_genes_paired.to_csv("significant_genes_paired.csv")
+up_in_cancer.to_csv("upregulated_genes_paired.csv")
+down_in_cancer.to_csv("downregulated_genes_paired.csv")
+```
