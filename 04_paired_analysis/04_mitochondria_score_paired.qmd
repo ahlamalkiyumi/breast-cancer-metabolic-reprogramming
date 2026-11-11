@@ -1,0 +1,457 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+Sys.setenv(RETICULATE_PYTHON="/Users/air/bioenv311/bin/python")
+
+library(reticulate)
+
+py_config()
+```
+
+```{python}
+import pandas as pd
+import numpy as np
+from scipy.stats import wilcoxon,  mannwhitneyu, spearmanr
+from statsmodels.stats.multitest import multipletests
+import matplotlib.pyplot as plt
+import statsmodels.formula.api as smf
+```
+
+
+```{python}
+mitocarta = pd.read_excel("Human.MitoCarta3.0.xls", sheet_name="A Human MitoCarta3.0")
+mito_genes = set(mitocarta["Symbol"].dropna().unique())
+data_filtered = pd.read_csv("data_filtered.csv", index_col=0)
+genes_metadata = pd.read_csv("tcga_brca_gene_metadata.csv",index_col=0)
+sample = pd.read_csv("sample.csv",index_col=0)
+meta_sub = pd.read_csv("sample_metadata_with_subtype.csv")
+```
+
+
+```{python}
+# Map Ensembl IDs to gene symbols 
+data_filtered["gene_symbol"] = data_filtered.index.map(genes_metadata["gene_name"])
+data_filtered = data_filtered.dropna(subset=["gene_symbol"])
+data_filtered = data_filtered.drop_duplicates(subset="gene_symbol", keep="first")
+data_filtered = data_filtered.set_index("gene_symbol")
+```
+
+
+```{python}
+# 1. Patient ID 
+sample = sample.copy()
+sample["patient"] = sample.index.str[:12]
+
+# 2. Keep only the two sample 
+type_col = "tcga.cgc_sample_sample_type"
+keep_types = ["Primary Tumor", "Solid Tissue Normal"]
+s = sample[sample[type_col].isin(keep_types)]
+
+# 3. Patients that have BOTH a tumor and a normal sample
+n_types = s.groupby("patient")[type_col].nunique()
+paired_patients = n_types[n_types == 2].index
+print("Paired patients:", len(paired_patients))
+```
+
+```{python}
+# 4. Reduce the sample table to those patients
+sample_paired = s[s["patient"].isin(paired_patients)].copy()
+
+# 5. Reduce the expression table to the same samples (same order)
+data_paired = data_filtered[sample_paired.index]
+```
+
+```{python}
+# 6. Checks
+print(sample_paired[type_col].value_counts())
+print("Columns match index:", list(data_paired.columns) == list(sample_paired.index))
+dup = sample_paired.groupby(["patient", type_col]).size()
+print("Patients with more than one sample of the same type:", (dup > 1).sum())
+```
+
+```{python}
+type_col = "tcga.cgc_sample_sample_type"
+
+# library size per sample
+lib = data_paired.sum(axis=0)
+sample_paired["lib_size"] = lib.reindex(sample_paired.index)
+
+# for each (patient, type), keep the sample with the largest library size
+keep_idx = (sample_paired
+            .sort_values("lib_size", ascending=False)
+            .groupby(["patient", type_col])
+            .head(1)
+            .index)
+
+removed = sample_paired.index.difference(keep_idx)
+print("Removed samples:", list(removed))
+
+sample_paired = sample_paired.loc[sample_paired.index.isin(keep_idx)].drop(columns="lib_size")
+data_paired = data_paired[sample_paired.index]
+
+# checks
+print(sample_paired[type_col].value_counts())                  # expect 112 and 112
+print("Patients:", sample_paired["patient"].nunique())          # expect 112
+print("Columns match index:", list(data_paired.columns) == list(sample_paired.index))
+print("Duplicates left:",
+      (sample_paired.groupby(["patient", type_col]).size() > 1).sum())  # expect 0
+```
+
+```{python}
+sample_paired.to_csv("sample_paired.csv")
+```
+
+```{python}
+cpm = data_paired.div(data_paired.sum(axis=0), axis=1) * 1e6
+log_expr = np.log2(cpm + 1)   
+```
+
+```{python}
+#Subset to MitoCarta genes actually present in data
+mito_genes_present = [g for g in mito_genes if g in log_expr.index]
+print(f"MitoCarta genes found in your dataset: {len(mito_genes_present)} "
+      f"out of {len(mito_genes)}")
+ 
+mito_expr = log_expr.loc[mito_genes_present]
+```
+
+```{python}
+gene_means = mito_expr.mean(axis=1)
+gene_stds = mito_expr.std(axis=1)
+z_scores = mito_expr.sub(gene_means, axis=0).div(gene_stds, axis=0)
+mito_score = z_scores.mean(axis=0)   # average across genes, per sample
+mito_score.name = "mitochondrial_score"
+ 
+print("\nMitochondrial score summary:")
+print(mito_score.describe())
+ 
+#mito_score.to_csv("mitochondrial_score_per_sample_paired.csv")
+```
+
+```{python}
+mito_expr = data_paired.loc[data_paired.index.intersection(mito_genes)]   
+print(mito_expr.iloc[:3, :3])
+print("Genes used:", mito_expr.shape[0], "of", len(mito_genes))
+```
+
+
+```{python}
+a = list(mito_score.index)
+b = list(sample_paired.index)
+
+print("Lengths:", len(a), len(b))
+print("Same samples (ignoring order):", set(a) == set(b))
+print("Only in mito_score:", len(set(a) - set(b)))
+print("Only in sample_paired:", len(set(b) - set(a)))
+```
+
+```{python}
+type_col = "tcga.cgc_sample_sample_type"
+df = pd.DataFrame({"score": mito_score,
+                   "patient": sample_paired["patient"],
+                   "type": sample_paired[type_col]})
+wide = df.pivot(index="patient", columns="type", values="score")
+diff = wide["Primary Tumor"] - wide["Solid Tissue Normal"]
+
+print("Patients:", len(diff))
+print("Median paired difference:", round(diff.median(), 3))
+print("Patients with tumor > normal:", (diff > 0).sum(), "of", len(diff))
+print("Wilcoxon signed-rank p =", wilcoxon(diff).pvalue)
+
+# effect size: paired difference relative to its spread
+print("Effect size (mean diff / SD of diff):", round(diff.mean() / diff.std(), 2))
+```
+In 112 patients with matched tumor and normal tissue, the mitochondrial expression score was higher in the tumor in 64 (57%) of pairs (median paired difference 0.060; Wilcoxon signed-rank p = 0.003; effect size 0.31).
+
+
+
+split the 112 paired differences by PAM50 subtype to see whether the increase is stronger in some subtypes, and whether the 34 patients with a lower score cluster in one of them.
+
+```{python}
+# find the barcode column (it may be the index column or "tcga.tcga_barcode")
+print(meta_sub.columns.tolist()[:10])
+barcode_col = "tcga.tcga_barcode"          # change if the printout shows a different name
+meta_sub["patient"] = meta_sub[barcode_col].astype(str).str[:12]
+
+# one PAM50 label per patient
+sub_map = (meta_sub.dropna(subset=["BRCA_Subtype_PAM50"])
+                   .drop_duplicates("patient")
+                   .set_index("patient")["BRCA_Subtype_PAM50"])
+
+# check the match with your 112 paired patients
+print("Patients with a label:", diff.index.isin(sub_map.index).sum(), "of", len(diff))
+
+res = pd.DataFrame({"diff": diff, "subtype": diff.index.map(sub_map)})
+out = res.groupby("subtype", dropna=False)["diff"].agg(
+    median="median",
+    n="count",
+    frac_tumor_higher=lambda x: round((x > 0).mean(), 2),
+)
+print(out)
+```
+LumB shows a clear increase, with about 86% of pairs higher.
+LumA has essentially no change now: a median of 0.001 and 51% of pairs, which is a coin flip. The earlier significant result (adjusted p = 0.008) came from the depth artifact, and it was the largest group, so it drove the pooled number.
+Her2 is weaker, and with 9 pairs it can’t say much.
+Basal is unchanged in direction: a slight decrease, with fewer than half of the pairs going up.
+
+
+test each subtype’s paired difference and plot it, using only subtypes with at least 9 pairs.
+
+```{python}
+res_ok = res[res["subtype"].isin(["Basal", "Her2", "LumA", "LumB"])]
+rows = []
+for s, d in res_ok.groupby("subtype"):
+    rows.append({"subtype": s, "n": len(d), "median_diff": d["diff"].median(),
+                 "pvalue": wilcoxon(d["diff"]).pvalue})
+tab = pd.DataFrame(rows)
+tab["padj"] = multipletests(tab["pvalue"], method="fdr_bh")[1]
+print(tab.round(4))
+
+order = ["Basal", "Her2", "LumA", "LumB"]
+res_ok.boxplot(column="diff", by="subtype", positions=range(4))
+plt.axhline(0, color="grey", linestyle="--")
+plt.ylabel("Tumor - normal (mitochondrial score)")
+plt.show()
+#plt.savefig("mito_paired_diff_by_subtype.png", dpi=200, bbox_inches="tight")
+```
+
+Only LumB is significant after correction (padj 0.0006). Basal, Her2 and LumA show no detectable change, and Her2 has only 9 pairs, so it can’t say much.
+
+find out what inside the score makes Basal different. Run the same paired test per MitoCarta pathway, separately in Basal and LumB, and compare the two lists. The questions are whether Basal has the same biogenesis and import increase but a larger drop in FAO and lipid pathways, or whether the biogenesis pathways don’t rise in Basal at all. That connects directly to your FAO and immune story in Basal-like tumors
+
+
+## MitoCarta3.0 Pathway-level sub-scores
+
+```{python}
+mitopathways = pd.read_excel(
+    "Human.MitoCarta3.0.xls",
+    sheet_name="C MitoPathways"
+)
+ 
+print(mitopathways.columns.tolist())
+print(mitopathways.head())
+```
+
+```{python}
+GENES_COL = "Genes"
+PATHWAY_COL = "MitoPathway"
+HIERARCHY_COL = "MitoPathways Hierarchy"
+
+def parse_genes(gene_string):
+  if pd.isna(gene_string):
+    return[]
+  return [g.strip() for g in str(gene_string).replace(",", " ").split() if g.strip()]
+
+#Parse each pathway's gene list into a proper Python list
+def parse_genes(gene_string):
+    if pd.isna(gene_string):
+        return []
+    # MitoCarta typically separates with spaces; adjust to "," if needed
+    return [g.strip() for g in str(gene_string).replace(",", " ").split() if g.strip()]
+ 
+mitopathways["gene_list"] = mitopathways[GENES_COL].apply(parse_genes)
+mitopathways["n_genes"] = mitopathways["gene_list"].apply(len)
+ 
+print(f"\nTotal pathways defined: {len(mitopathways)}")
+print(mitopathways[[PATHWAY_COL, "n_genes"]].sort_values("n_genes", ascending=False).head(20))
+```
+
+```{python}
+pathway_scores = pd.DataFrame(index=log_expr.columns)
+ 
+for _, row in mitopathways.iterrows():
+    pathway_name = row[PATHWAY_COL]
+    genes = row["gene_list"]
+ 
+    genes_present = [g for g in genes if g in log_expr.index]
+    if len(genes_present) < 3:
+        continue  # skip pathways with too few genes present to score meaningfully
+ 
+    sub_expr = log_expr.loc[genes_present]
+    z = sub_expr.sub(sub_expr.mean(axis=1), axis=0).div(sub_expr.std(axis=1), axis=0)
+    pathway_scores[pathway_name] = z.mean(axis=0)
+ 
+print(f"\nComputed sub-scores for {pathway_scores.shape[1]} pathways")
+#pathway_scores.to_csv("mitocarta_pathway_subscores.csv")
+```
+
+```{python}
+type_col = "tcga.cgc_sample_sample_type"
+
+# pathway_scores must have rows = the 224 paired samples; sample_paired has "patient" and type_col
+assert list(pathway_scores.index) == list(sample_paired.index), "index mismatch"
+
+is_t = sample_paired[type_col] == "Primary Tumor"
+is_n = sample_paired[type_col] == "Solid Tissue Normal"
+
+tum = pathway_scores[is_t].copy()
+nor = pathway_scores[is_n].copy()
+tum.index = sample_paired.loc[is_t, "patient"]
+nor.index = sample_paired.loc[is_n, "patient"]
+nor = nor.loc[tum.index]                       # same patient order
+print("Pairs:", len(tum))                       # expect 112
+
+diff = tum - nor
+
+results = []
+for pathway in diff.columns:
+    d = diff[pathway].dropna()
+    if len(d) < 5:
+        continue
+    results.append({
+        "pathway": pathway,
+        "median_diff": d.median(),
+        "frac_tumor_higher": (d > 0).mean(),
+        "direction": "UP in tumor" if d.median() > 0 else "DOWN in tumor",
+        "pvalue": wilcoxon(d).pvalue,
+    })
+
+results_df = pd.DataFrame(results).sort_values("pvalue")
+results_df["padj"] = multipletests(results_df["pvalue"], method="fdr_bh")[1]
+results_df.to_csv("mitocarta_pathway_tumor_vs_normal_paired.csv", index=False)
+
+pd.set_option("display.width", 250)
+print("\n=== Top 20 pathways, paired tumor vs normal ===")
+print(results_df.head(20).round(4).to_string(index=False))
+
+print("\n=== OXPHOS-related and fatty-acid-related pathways ===")
+mask = results_df["pathway"].str.contains(
+    "OXPHOS|oxidative|fatty acid|electron transport|Complex", case=False, na=False)
+print(results_df[mask].round(4).to_string(index=False))
+```
+
+-The ranking of the top pathways is the same: import and biogenesis up (TIM23, MIA40, chaperones, mitochondrial ribosome), serine metabolism up, and the differentiated and lipid pathways down (itaconate, catechol, biotin, choline, FAO, xenobiotic). The sizes shift by 5 to 15%, and the fractions of pairs barely move.
+
+Complex V is significantly lower in tumor (padj 0.009), so the respiratory chain is up for Complexes I, III and IV, flat for II, and slightly down for V.  “OXPHOS up” is better stated as “most OXPHOS complexes up”.
+
+
+
+```{python}
+keep = ["Fatty acid oxidation", "OXPHOS", "Complex I", "Complex II", "Complex III",
+        "Complex IV", "Complex V", "TIM23 presequence pathway", "MIA40", "TOM",
+        "Chaperones", "Mitochondrial ribosome", "Serine metabolism",
+        "Choline and betaine metabolism", "Catechol metabolism"]
+p = results_df[results_df["pathway"].isin(keep)].sort_values("median_diff")
+
+fig, ax = plt.subplots(figsize=(7, 5))
+colors = ["#c0392b" if v < 0 else "#2e86c1" for v in p["median_diff"]]
+ax.barh(p["pathway"], p["median_diff"], color=colors)
+for y, (v, f) in enumerate(zip(p["median_diff"], p["frac_tumor_higher"])):
+    ax.text(v + (0.03 if v >= 0 else -0.03), y, f"{f:.0%}",
+            va="center", ha="left" if v >= 0 else "right", fontsize=8)
+ax.axvline(0, color="grey", lw=0.8)
+ax.set_xlabel("Median paired difference (tumor - normal), z-score units\nLabels: % of patients with tumor > normal")
+ax.set_title("MitoCarta pathways, 112 matched pairs")
+plt.tight_layout()
+plt.show()
+plt.savefig("mitocarta_paired_summary.png", dpi=200)
+```
+
+```{python}
+# pathway_scores: rows = samples, columns = pathways (computed within the paired cohort)
+def paired_by_pathway(sub):
+    pats = res.index[res["subtype"] == sub]
+    t = pathway_scores[(sample_paired[type_col] == "Primary Tumor") &
+                       sample_paired["patient"].isin(pats)].copy()
+    n = pathway_scores[(sample_paired[type_col] == "Solid Tissue Normal") &
+                       sample_paired["patient"].isin(pats)].copy()
+    t.index = sample_paired.loc[t.index, "patient"]
+    n.index = sample_paired.loc[n.index, "patient"]
+    n = n.loc[t.index]
+    d = t - n
+    out = pd.DataFrame({"median_diff": d.median(),
+                        "pvalue": [wilcoxon(d[c]).pvalue for c in d.columns]})
+    out["padj"] = multipletests(out["pvalue"], method="fdr_bh")[1]
+    return out
+
+basal = paired_by_pathway("Basal")
+lumb = paired_by_pathway("LumB")
+cmp_ = basal.join(lumb, lsuffix="_Basal", rsuffix="_LumB")
+print(cmp_.sort_values("median_diff_Basal").head(10).round(3))    # most down in Basal
+print(cmp_.sort_values("median_diff_Basal").tail(10).round(3))    # most up in Basal
+```
+
+Fatty acid oxidation (FAO) is lower in tumor than in matched normal in both subtypes, and the drop looks about twice as large in Basal, though that comparison isn’t tested yet.
+
+FAO, choline/betaine and molybdenum cofactor fall more in Basal on the face of it. GABA metabolism is significant in Basal and not in LumB,
+
+**Tissue composition.** Normal breast tissue contains fat cells, which are rich in fatty acid, lipid and choline metabolism. A larger drop in Basal could reflect how much fat tissue surrounds the tumor and normal samples, as well as tumor-cell biology. This is a limitation you should state, and bulk data can’t separate the two.
+
+test the Basal vs LumB difference directly, and look at the pathways that go up.
+
+```{python}
+def paired_diffs(sub):
+    pats = res.index[res["subtype"] == sub]
+    t = pathway_scores[(sample_paired[type_col] == "Primary Tumor") &
+                       sample_paired["patient"].isin(pats)].copy()
+    n = pathway_scores[(sample_paired[type_col] == "Solid Tissue Normal") &
+                       sample_paired["patient"].isin(pats)].copy()
+    t.index = sample_paired.loc[t.index, "patient"]
+    n.index = sample_paired.loc[n.index, "patient"]
+    return t - n.loc[t.index]
+
+d_b, d_l = paired_diffs("Basal"), paired_diffs("LumB")
+
+direct = pd.DataFrame({
+    "median_diff_Basal": d_b.median(),
+    "median_diff_LumB": d_l.median(),
+    "pvalue_direct": [mannwhitneyu(d_b[c], d_l[c]).pvalue for c in d_b.columns],
+})
+direct["padj_direct"] = multipletests(direct["pvalue_direct"], method="fdr_bh")[1]
+direct["Basal_minus_LumB"] = direct["median_diff_Basal"] - direct["median_diff_LumB"]
+
+pd.set_option("display.max_columns", None); pd.set_option("display.width", 250)
+print(direct.sort_values("pvalue_direct").head(15).round(3))     # biggest Basal vs LumB differences
+print(direct.loc[["Fatty acid oxidation"]].round(3))              # your pathway of interest
+print(cmp_.sort_values("median_diff_Basal").tail(10)[
+    ["median_diff_Basal", "padj_Basal", "median_diff_LumB", "padj_LumB"]].round(3))  # top up in Basal
+```
+
+FAO decreased more in Basal-like than in Luminal B tumors, nominal p = 0.006, borderline after correction across all pathways
+
+
+check the fat-tissue explanation.
+
+```{python}
+adipo_genes = [g for g in ["ADIPOQ", "PLIN1", "LEP", "CIDEC", "FABP4", "LIPE"] if g in log_expr.index]
+
+ex = log_expr.loc[adipo_genes]                       # corrected: log_expr, not data_paired
+z = ex.sub(ex.mean(axis=1), axis=0).div(ex.std(axis=1), axis=0)
+adipo = z.mean(axis=0)
+
+norm_ids = sample_paired.index[sample_paired[type_col] == "Solid Tissue Normal"]
+n_adipo = adipo[norm_ids]
+n_adipo.index = sample_paired.loc[norm_ids, "patient"]
+
+fao_drop = pd.concat([d_b["Fatty acid oxidation"], d_l["Fatty acid oxidation"]])
+dfm = pd.DataFrame({"fao_diff": fao_drop,
+                    "subtype": ["Basal"] * len(d_b) + ["LumB"] * len(d_l),
+                    "normal_adipo": n_adipo.reindex(fao_drop.index)}).dropna()
+print("n =", len(dfm), dfm["subtype"].value_counts().to_dict())
+
+term = "C(subtype, Treatment('LumB'))[T.Basal]"
+for name, f in [("unadjusted", "fao_diff ~ C(subtype, Treatment('LumB'))"),
+                ("adjusted for normal fat", "fao_diff ~ C(subtype, Treatment('LumB')) + normal_adipo")]:
+    m = smf.ols(f, data=dfm).fit()
+    lo, hi = m.conf_int().loc[term]
+    print(f"{name}: Basal vs LumB = {m.params[term]:.2f} (95% CI {lo:.2f} to {hi:.2f}), p = {m.pvalues[term]:.3f}")
+```
+
+The FAO result survives the adipocyte adjustment with corrected data, and the estimate is a little smaller than the earlier one.
+
+In patients with matched tumor and normal tissue, the decrease in the fatty acid oxidation expression score in tumor was larger in Basal-like (n = 17) than in Luminal B tumors (n = 22). The difference remained after adjusting for adipocyte-marker expression in the matched normal tissue (-0.48 SD, 95% CI -0.75 to -0.21, p = 0.001). Across all MitoCarta pathways screened, this comparison was nominally significant (p = 0.006) and borderline after multiple-testing correction (adjusted p = 0.061).
+
+Where the paired analysis stands now
+-Pooled mito score: 64 of 112 pairs higher (57%), p = 0.003, a modest shift
+-By subtype: significant only in LumB (padj 0.0006)
+-Pathways: the same pattern as before (import and biogenesis up, differentiated and lipid pathways down)
+-FAO, Basal vs LumB: confirmed, with the fat control
+-Serine and sideroflexin pathways: the largest Basal-vs-LumB differences in the screen
+
+
+
+
+
